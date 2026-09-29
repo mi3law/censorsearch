@@ -5,3 +5,6 @@ A single static web page that searches a school's banned-materials list, kept in
 No backend, no stored data, no accounts: the page reads the live sheet (read-only) each time it loads.
 
 Status: PRD under review; development has not started.
+
+- [PRD.md](PRD.md) — requirements, with every search hiccup the app handles
+- [prototype/](prototype/) — a Node prototype of the matching rules, stress-tested against 180 teacher queries
