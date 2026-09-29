@@ -4,3 +4,6 @@
 *.xls
 *.xlsx
 *.csv
+
+# Prototype output generated from the sample list
+prototype/data/
