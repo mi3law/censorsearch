@@ -25,7 +25,7 @@ Teachers and librarians use it to check whether a book, DVD or other material is
 4. **Verify in the source.** Click a result to open the sheet at that exact row.
 5. **Later: check a reading list.** Paste several titles or authors separated by semicolons and get results grouped per term.
 
-**Scope for v1:** the main tab (**Sheet1**) only. The Other Materials tab is updated rarely and holds 5 rows in the sample, so it is optional. Every result carries its tab name anyway, so adding a tab later is a one-line config change.
+**Scope for v1:** the main tab (**Sheet1**) only. The Other Materials tab is updated rarely and holds 5 rows in the sample, so it is optional. Every result carries its tab name anyway, so adding a tab later is a one-line config change. The main tab has about 1,200 rows today. Arabic-specific matching is also out of v1: about 17 rows are in Arabic, and they still match when typed as written.
 
 ## Data source and architecture
 
@@ -53,7 +53,7 @@ Each method below was tested live against public Google sheets on 29 September 2
 | Method | What it needs | Live? | Row numbers | Colours and memo links | Verdict |
 | --- | --- | --- | --- | --- | --- |
 | CSV export by link (`/export?format=csv&gid=…`) | Sheet shared "Anyone with the link can view" | Yes, never cached | Exact; hidden and filtered rows included | No | **Default path** |
-| XLSX export by link (`/export?format=xlsx`) | Same | Yes | Exact | Yes, but no tab ids and a bigger parser | Upgrade if colours or links turn out to matter |
+| XLSX export by link (`/export?format=xlsx`) | Same | Yes | Exact | Yes, but no tab ids and a bigger parser | Not needed: colour only mirrors Banned By |
 | Apps Script web app returning JSON | A script owned by a school account with view access, deployed to "Anyone" | Yes (no cache by default) | Exact, plus hidden-row flags and tab ids | Yes | **Fallback; the school's sheet** |
 | Google Visualization query (`gviz/tq`) | Link sharing | Yes | None; hidden rows silently dropped | No | Rejected |
 | Publish to web | The owner publishes, making the list public at a new URL | Lags by minutes | Exact | Only for whole-document publishing | Rejected: owner action, and it publishes the list |
@@ -149,6 +149,8 @@ Rules **add** alternate forms and never replace the original. "Second" also inde
 | Surnames that are common words | Not in sample; e.g. authors named King, Green, White | "King", "Green" | For a one-word query, author matches rank above title matches, and each result says which field matched. | v1 should |
 | Placeholder authors | Not in sample; e.g. "Unknown", "Anonymous", "Various", "N/A", "-" | "orwell 1984" should still fall back on a row whose author reads "N/A" | Treat placeholders as blank for matching and for the missing-author rule, but display them as written. | v1 should |
 
+**Alias lists** are one small hand-kept file in the repo, `aliases.json`, for names the sheet doesn't contain: pen names (Daniel Handler → Lemony Snicket), acronyms (CKLA ↔ Core Knowledge Language Arts) and alternate titles (Philosopher's Stone ↔ Sorcerer's Stone). The app only uses it to widen a query, and results found this way are labelled "via alias". It can start empty.
+
 ### Titles: partial, longer, series, editions, look-alikes
 
 | Hiccup | In the sheet | Teacher types | App's rule | Priority |
@@ -188,7 +190,7 @@ These don't come from what teachers type. They change what the search sees, and 
 | Notes box on a data row | Sheet1 H5:L22 holds the red/blue legend, on the same row as r5 "101 Stories of Grand Mother" | "ministry", "library" or "red" wrongly return r5 | Index only the mapped columns and ignore everything to their right. Parse with a real CSV parser, header detection off and empty lines kept; never split on line breaks, or the notes' 7 line breaks shift every later row. | v1 must |
 | Searching every column floods results | Banned By "KES" matches "Jokes" (r4, r6); "book" hits 19 of 25 rows through Type; "ministry" hits 16 | "KES", "book", "ministry" and "2009" return noise | Search Title, Author, ISBN and Memo. Type and Banned By can complete a match ("ministry dvd") but never create one alone. Year of Banning isn't searched. | v1 must |
 | A title stored as a number or date | Sheet1 r9 1984 is a numeric cell among text titles; not in sample: titles like "11/22/63" turned into dates | "1984" shows as "1984.0", or a date title as a serial number | Always turn values into text as displayed. The Visualization endpoint is avoided because it drops hidden rows and blanks text inside number columns (e.g. an ISBN ending in X). | v1 must |
-| Status from Banned By | Sheet1 notes: red = Ministry (must remove), blue = UAS, others case by case. The two tabs use different reds; CSV drops colour. Not in sample: "Minstry", "MOE", "KES / Ministry", blanks | A Ministry row with a variant spelling or two codes shows "check case by case", a silent downgrade | Split Banned By on / , ; & and "and". Any part within one edit of Ministry or MOE → "Must remove (Ministry)"; UAS → "Banned by UAS"; blank → "Status not stated, open the row"; otherwise "Check case by case" plus the code. When in doubt, show the more severe status. Where colours are readable, flag rows whose fill and text disagree. | v1 must |
+| Status from Banned By | Sheet1 notes: red = Ministry (must remove), blue = UAS, others case by case. The two tabs use different reds; CSV drops colour. Not in sample: "Minstry", "MOE", "KES / Ministry", blanks | A Ministry row with a variant spelling or two codes shows "check case by case", a silent downgrade | Split Banned By on / , ; & and "and". Any part within one edit of Ministry or MOE → "Must remove (Ministry)"; UAS → "Banned by UAS"; blank → "Status not stated, open the row"; otherwise "Check case by case" plus the code. When in doubt, show the more severe status. Colour only highlights what Banned By already says (confirmed), so it is never read. | v1 must |
 | Merged data cells | Not in sample; a maintainer merges D8:D9 = "Ministry" | Row 9's Banned By arrives empty and its status is downgraded | The Apps Script path copies the merged value to every row it covers. CSV can't see merges, so an empty Banned By shows "Status not stated, open the row". | v1 must |
 | A load failure looks like "no results" | A web filter blocks Google's download domain, the sheet is made private, a tab is deleted or the layout changes | "1984" shows "No listing found" when nothing was loaded | Explicit states: loading (a typed query waits), loaded (N rows, the sheet's "updated as of", fetch time), partial (names the failed tab), failed (the error and a Retry button). Never search an empty dataset. | v1 must |
 | Unsafe cell text and links | Every sheet editor controls cell text and link targets; Sheet1 r21 and Other Materials r5–r8 link to Drive | A title containing HTML, or a javascript: link, would run in teachers' browsers | Render cell text as text, never HTML; accept only https links; open them with rel="noopener noreferrer"; restrict which sites the page may contact. | v1 must |
@@ -218,19 +220,20 @@ These don't come from what teachers type. They change what the search sees, and 
 | Long pasted text | Query side | A pasted Amazon description of 1,800 characters (the prototype took 161 ms per search on a fast laptop; several times slower on a Chromebook) | Above 300 characters, search on Enter or after 400 ms, matching on the first 12 main words, with a note saying so. | v1 should |
 | A pasted list of several titles | Query side | "Fahrenheit 451", "1984" and "The 7th Knot" on three lines (the prototype silently dropped 1984) | When a paste has 2 or more lines, search each line separately. Cheap enough to ship in v1, ahead of full multi-term search. | v1 should |
 | Highlighting after folding | Sheet1 r5 "Grand Mother", r20 "7th", r16 "Farenheit" | "grandmother", "seventh knot" | Keep each word's position in the original cell text and highlight that; explain alternates, e.g. "seventh = 7th". | v1 should |
+| The school filter hides the only match | Sheet1 r4 "101 Creepy Jokes" is listed under RS only | "creepy jokes" with "Hide other schools' listings" ticked | Never hide silently: show "1 more listed by other schools" with a one-click reveal, and never show the no-results text while filtered rows match. | v1 should |
 | Semicolons | Not in sample; titles like "Frankenstein; or, The Modern Prometheus", and the Arabic ؛ | Now: a title containing ";". Later: a list | v1 treats ; and ؛ as spaces. The later multi-term search splits on them. | v1 must |
 | No results | Any unlisted item | Anything | "No listing found. This does not mean the item is permitted." Add why it may differ (another spelling, title or edition, or a change since the page loaded) and tips: the author's surname alone, one distinctive title word, the ISBN. Never say "not banned". | v1 must |
 
 ### Arabic script and transliteration
 
-The sample has no Arabic or transliterated entries. If the full sheet does (see open questions), these apply; each is cheap to add.
+Out of v1 by decision: only about 17 of \~1,200 rows are in Arabic. Those rows still match when a teacher types the words as written, and the general accent rule already strips Arabic diacritics. These rules wait until there's a need.
 
 | Hiccup | Example | Teacher types | App's rule | Priority |
 | --- | --- | --- | --- | --- |
-| Transliterated Arabic names | "Mohammed / Muhammad / Mohamed", "Abdul / Abdel Rahman", "Yousef / Yusuf" | Any spelling other than the sheet's | A small equivalence table for common name families, a vowel fold (ou→u, ee→i, doubled letters collapsed) and the normal fuzzy rule. Matches land in the close tier. | v1 should |
-| al- and el- prefixes | "Al-Ghazali", "El Saadawi, Nawal" | "Ghazali", "Nawal Saadawi" | Index the joined form and the bare stem. Never strip "al" from words like Alchemist or Alice. | v1 should |
-| Arabic-script letter variants | أ/إ/آ vs ا, ة vs ه, ى vs ي; diacritics (tashkeel) and tatweel | The same words typed on another keyboard | Fold the letter variants and strip diacritics and tatweel on both sides; also index words without a leading ال. | v1 should |
-| Arabic-Indic digits and punctuation | ١٩٨٤, ؛ ، ؟ | "١٩٨٤" | Map to 0–9 and ordinary punctuation (the prototype needed this fix). | v1 should |
+| Transliterated Arabic names | "Mohammed / Muhammad / Mohamed", "Abdul / Abdel Rahman", "Yousef / Yusuf" | Any spelling other than the sheet's | A small equivalence table for common name families, a vowel fold (ou→u, ee→i, doubled letters collapsed) and the normal fuzzy rule. Matches land in the close tier. | Later |
+| al- and el- prefixes | "Al-Ghazali", "El Saadawi, Nawal" | "Ghazali", "Nawal Saadawi" | Index the joined form and the bare stem. Never strip "al" from words like Alchemist or Alice. | Later |
+| Arabic-script letter variants | أ/إ/آ vs ا, ة vs ه, ى vs ي; tatweel | The same words typed on another keyboard | Fold the letter variants and strip tatweel on both sides; also index words without a leading ال. | Later |
+| Arabic-Indic digits and punctuation | ١٩٨٤, ؛ ، ؟ | "١٩٨٤" | Map to 0–9 and ordinary punctuation (the prototype already does this). | Later |
 | Right-to-left display and input methods | Mixed Arabic and digits, e.g. "كتاب 2" | Arabic typed through an input method or on a phone | Wait for composition to finish before searching; set text direction automatically on the box and on each result field. | Later |
 
 ### Deliberately not solved
@@ -286,9 +289,11 @@ Match and Close appear together in the main list, with Close carrying its badge.
 
 **Volume:** the first 50 main results and 25 possible matches, each with its total count and a "Show all N" control. Results are never cut off silently.
 
+**Filter: hide other schools' listings (v1 should).** One checkbox. When ticked, results keep Ministry and UAS rows and hide rows banned only under other schools' codes (RS, KES, HUBS…). It assumes UAS is this school's own code. It starts unticked on every page load and never hides silently: the results say "3 more listed by other schools" with a one-click reveal. A row with a blank or unreadable Banned By is never hidden. This is a few lines on top of the status already derived from Banned By.
+
 ### Implementation choice
 
-A hand-rolled matcher in plain JavaScript, about 300 lines with no dependencies. A prototype built during this review ran 180 realistic teacher queries against the 25 sample rows. After 17 rule fixes, it found all 162 expected rows (159 in the main list) with no floods of wrong rows. Hidden among 20,000 synthetic rows, all 162 were still found, at 0.84 ms per keystroke (median) on a fast laptop. Expect 3–6× slower on a school Chromebook, still well under the 150 ms pause.
+A hand-rolled matcher in plain JavaScript, about 300 lines with no dependencies. A prototype built during this review ran 180 realistic teacher queries against the 25 sample rows. After 17 rule fixes, it found all 162 expected rows (159 in the main list) with no floods of wrong rows. Hidden among 20,000 synthetic rows, all 162 were still found, at 0.84 ms per keystroke (median) on a fast laptop. Expect 3–6× slower on a school Chromebook, still well under the 150 ms pause. The real sheet has about 1,200 rows, far inside these figures.
 
 | Engine | Per keystroke at 20,000 rows | Recall on 20 tricky targets | Verdict |
 | --- | --- | --- | --- |
@@ -330,12 +335,13 @@ The first question decides the access method; the rest tune search rules and wor
 - [x] **Who may use the Apps Script page?** Anyone with its link for now. Restricting it to school accounts may come later.
 - [x] **Does the school's Workspace admin allow Apps Script web apps open to "Anyone"?** Unknown; assumed yes for now. If it turns out to be blocked, v1 needs school sign-in.
 - [x] **Which account owns the Apps Script?** The project owner's teacher account for now, possibly swapped for a long-lived role account later. That account needs Viewer access to the sheet, and the web app stops working if the account is removed, so the swap should happen before any staff change.
-- [ ] **Roughly how many rows does the full sheet have?** Hundreds or tens of thousands changes load time, not the design.
-- [ ] **Does the full sheet contain Arabic-script or transliterated titles and names?** If yes, the Arabic rules move up to v1.
-- [ ] **Does colour ever say something the Banned By column doesn't?** For example a blue row without "UAS" (no sample row says UAS), or struck-through rows for lifted bans.
-- [ ] **What do the school codes in Banned By mean** (RS, KES, HUBS, AAG, ACA, NES, GBS, IAK, UAS), and should results spell them out?
-- [ ] **Who maintains the small alias lists** (pen names, acronyms)? A JSON file in the repo is the simplest option.
-- [ ] **Where will the page be hosted?** GitHub Pages from the new repo is the default.
+- [x] **How many rows?** About 1,200 today, in the low thousands. No special handling needed.
+- [x] **Arabic rows?** About 17. Arabic-specific rules are out of v1.
+- [x] **Does colour say anything Banned By doesn't?** No, colour only highlights Banned By, so the app never reads it.
+- [x] **Banned By codes:** other schools' codes can be hidden with a filter (a v1 should). UAS is assumed to be this school's own code.
+- [x] **Alias lists:** a JSON file in the repo (see the note below the Authors table).
+- [x] **Hosting:** GitHub Pages for now; possibly a school subdomain or page later, through school IT. Nothing ties the app to one host.
+- [ ] **Is UAS this school's own code?** Assumed yes; the filter treats every other code as another school.
 
 ## Sources
 
