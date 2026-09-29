@@ -220,7 +220,7 @@ These don't come from what teachers type. They change what the search sees, and 
 | Long pasted text | Query side | A pasted Amazon description of 1,800 characters (the prototype took 161 ms per search on a fast laptop; several times slower on a Chromebook) | Above 300 characters, search on Enter or after 400 ms, matching on the first 12 main words, with a note saying so. | v1 should |
 | A pasted list of several titles | Query side | "Fahrenheit 451", "1984" and "The 7th Knot" on three lines (the prototype silently dropped 1984) | When a paste has 2 or more lines, search each line separately. Cheap enough to ship in v1, ahead of full multi-term search. | v1 should |
 | Highlighting after folding | Sheet1 r5 "Grand Mother", r20 "7th", r16 "Farenheit" | "grandmother", "seventh knot" | Keep each word's position in the original cell text and highlight that; explain alternates, e.g. "seventh = 7th". | v1 should |
-| The school filter hides the only match | Sheet1 r4 "101 Creepy Jokes" is listed under RS only | "creepy jokes" with "Hide other schools' listings" ticked | Never hide silently: show "1 more listed by other schools" with a one-click reveal, and never show the no-results text while filtered rows match. | v1 should |
+| The Banned By filter hides the only match | Sheet1 r4 "101 Creepy Jokes" is listed under RS only | "creepy jokes" with RS unticked in the Banned By filter | Never hide silently: show "1 more hidden by the Banned By filter" with a one-click reveal, and never show the no-results text while filtered rows match. | v1 should |
 | Semicolons | Not in sample; titles like "Frankenstein; or, The Modern Prometheus", and the Arabic ؛ | Now: a title containing ";". Later: a list | v1 treats ; and ؛ as spaces. The later multi-term search splits on them. | v1 must |
 | No results | Any unlisted item | Anything | "No listing found. This does not mean the item is permitted." Add why it may differ (another spelling, title or edition, or a change since the page loaded) and tips: the author's surname alone, one distinctive title word, the ISBN. Never say "not banned". | v1 must |
 
@@ -289,7 +289,7 @@ Match and Close appear together in the main list, with Close carrying its badge.
 
 **Volume:** the first 50 main results and 25 possible matches, each with its total count and a "Show all N" control. Results are never cut off silently.
 
-**Filter: hide other schools' listings (v1 should).** One checkbox. When ticked, results keep Ministry and UAS rows and hide rows banned only under other schools' codes (RS, KES, HUBS…). It assumes UAS is this school's own code. It starts unticked on every page load and never hides silently: the results say "3 more listed by other schools" with a one-click reveal. A row with a blank or unreadable Banned By is never hidden. This is a few lines on top of the status already derived from Banned By.
+**Filter by Banned By (v1 should).** One checkbox per code found in the sheet (Ministry, UAS, RS, KES…), all treated the same and all ticked on every page load. Unticking a code hides rows banned only under that code; a row also listed under a ticked code stays. The filter never hides silently: the results say "3 more hidden by the Banned By filter" with a one-click reveal. A row with a blank Banned By is never hidden. This is a few lines on top of the status already derived from Banned By.
 
 ### Implementation choice
 
@@ -338,10 +338,9 @@ The first question decides the access method; the rest tune search rules and wor
 - [x] **How many rows?** About 1,200 today, in the low thousands. No special handling needed.
 - [x] **Arabic rows?** About 17. Arabic-specific rules are out of v1.
 - [x] **Does colour say anything Banned By doesn't?** No, colour only highlights Banned By, so the app never reads it.
-- [x] **Banned By codes:** other schools' codes can be hidden with a filter (a v1 should). UAS is assumed to be this school's own code.
+- [x] **Banned By codes:** UAS is this school's code. The Banned By filter lists every code, UAS included, and treats them all the same (a v1 should).
 - [x] **Alias lists:** a JSON file in the repo (see the note below the Authors table).
 - [x] **Hosting:** GitHub Pages for now; possibly a school subdomain or page later, through school IT. Nothing ties the app to one host.
-- [ ] **Is UAS this school's own code?** Assumed yes; the filter treats every other code as another school.
 
 ## Sources
 
