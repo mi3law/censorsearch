@@ -1,0 +1,8 @@
+{
+  "name": "censorsearch",
+  "private": true,
+  "description": "Static search page over a banned-materials Google Sheet",
+  "scripts": {
+    "test": "node --test \"test/*.test.js\""
+  }
+}
