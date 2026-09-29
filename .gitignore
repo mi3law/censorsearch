@@ -1,0 +1,6 @@
+.DS_Store
+
+# Sample exports of the source list stay local; the live Google Sheet is the data source.
+*.xls
+*.xlsx
+*.csv
