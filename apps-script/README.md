@@ -60,6 +60,7 @@ Open the `/exec` address in a private (incognito) window, where you're not signe
 - `{"format":"censorsearch-v1","error":"…"}` means the script ran but couldn't read the sheet; the message says why (see the table below).
 - A Google sign-in page means "Who has access" isn't "Anyone", or your admin doesn't allow it.
 - Adding `?gid=0` to the address returns only that tab.
+- Each row should carry `"hidden":false` (or `true` for a hidden or filtered row). `"hidden":null` on every row means the Google Sheets API service is off: redo step 1.5 (replace `appsscript.json`), save, and deploy a new version. The list still works without it, but rows hidden by the sheet's filter aren't labelled.
 
 ## 5. Point CensorSearch at it
 
@@ -72,9 +73,9 @@ The page says which source it's reading and shows "N items · updated as of … 
 
 ## Updating the script
 
-When `Code.gs` changes in this repository:
+When `Code.gs` or `appsscript.json` changes in this repository:
 
-1. Paste the new `Code.gs` over the old one and **Save**.
+1. Paste the new `Code.gs` over the old one. If `appsscript.json` changed too, replace it as well (step 1.5). **Save**, and authorize again if Google asks.
 2. Click **Deploy**, then **Manage deployments**, select the deployment, click the pencil (**Edit**), set **Version: New version**, then **Deploy**.
 
 This keeps the same `/exec` address. Don't use "New deployment" for an update: that creates a new address, and every link and `config.js` would need changing.
@@ -107,6 +108,7 @@ The script belongs to the account that created it, and stops working when that a
 | "This tab is not available from this script." | The page asked for a tab that isn't in `TABS` (without `TABS`, only the first tab that isn't hidden is available). Add its id to `TABS`, or fix the page's tab setting. |
 | "Every tab is hidden…" | Add the list's tab id to `TABS`. |
 | "No tab with this id in the spreadsheet…" | A tab listed in `TABS` was deleted. Remove it from `TABS`. |
+| Every row shows `"hidden":null`; the page never says "may be hidden by the sheet's filter" | The Google Sheets API service is off, usually because `appsscript.json` wasn't replaced. Replace it (step 1.5), save, and deploy a new version. |
 | A Google sign-in page instead of the list | Set "Who has access" to "Anyone" (Manage deployments, Edit). If "Anyone" isn't offered, see below. |
 
 **Risk: the school's Workspace admin can turn off Apps Script,** or web apps open to "Anyone" (the second is reported by users, not documented by Google). If that happens, this reader can't work without sign-in. Ask the admin to allow it for the script's account; otherwise CensorSearch would need school sign-in, with the page served by Apps Script itself, which is planned for later, not v1.
