@@ -25,9 +25,9 @@ The page reads one of two ways. Both feed the same search.
    https://mi3law.github.io/censorsearch/?sheet=https://docs.google.com/spreadsheets/d/<id>/edit%23gid=<tab id>
    ```
 
-   The sheet needs a header row (in its first 10 rows) with at least a Title column; columns are matched by header name. Without a tab id, the first tab (`gid=0`) is read.
+   The sheet needs a header row (in its first 10 rows) with at least a Title column; columns are matched by header name. Without a tab id, the sheet's first tab is read; its row links select the row only when that tab is `gid=0`, otherwise they open the sheet. When the link points at a different spreadsheet from `config.js`, the page says plainly that it is showing another sheet, not its usual list.
 
-2. **Through the read-only Apps Script**, for a sheet that can't be shared by link (the school's own sheet). Deploy [apps-script/Code.gs](apps-script/Code.gs) under an account with Viewer access to the sheet, following [apps-script/README.md](apps-script/README.md), then open the page with `?script=<the /exec link>`, or set `scriptUrl` in `config.js`. Putting the link in `config.js` publishes it in this repository; the `?script=` link keeps it out.
+2. **Through the read-only Apps Script**, for a sheet that can't be shared by link (the school's own sheet). Deploy [apps-script/Code.gs](apps-script/Code.gs) under an account with Viewer access to the sheet, following [apps-script/README.md](apps-script/README.md), then set `scriptUrl` in `config.js` so the plain page address reads it (recommended for the school's list). Alternatively open the page with `?script=<the /exec link>`: a script address the page doesn't know is shown with a warning and no sheet or row links, until its code (shown in the page's maintainer notes) is added to `trustedScripts` in `config.js`. That keeps the address itself out of this repository.
 
 The page shows which sheet it is reading, and a link back to the default list when an override is in use.
 
@@ -40,7 +40,7 @@ The page shows which sheet it is reading, and a link back to the default list wh
 | File | What it does |
 | --- | --- |
 | [index.html](index.html), [styles.css](styles.css) | The page. A strict Content-Security-Policy allows only this site and Google's sheet endpoints. |
-| [config.js](config.js) | The only settings: sheet link, tabs, optional Apps Script link, the school's Banned By code. |
+| [config.js](config.js) | The only settings: sheet link, tabs, optional Apps Script link and trusted script codes, the school's Banned By code. |
 | [src/sheet.js](src/sheet.js) | Reads the sheet: CSV by link or the Apps Script JSON, finds the header row, maps columns by name, keeps exact row numbers, derives the status from Banned By. |
 | [src/engine.js](src/engine.js) | The search: one normalizer for cells and queries, alternate forms, an in-memory index and the tiered matcher. Ported from the prototype, plus the PRD's v1 rules. |
 | [src/app.js](src/app.js) | The page's behaviour: load states, search as you type, results, the Banned By filter, freshness checks. |
