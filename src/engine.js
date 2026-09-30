@@ -18,14 +18,16 @@
   const FORMAT = new Set(list('book books disc discs disk dvd dvds cd cds video videos vhs bluray paperback hardcover hardback ' +
     'softcover kindle ebook audiobook audio novel edition editions ed edn anniversary illustrated unabridged abridged deluxe ' +
     'reprint revised expanded'));                                                              // FIX F4: format words are soft
-  const QUESTION = new Set(list('is are was can could may banned ban allowed permitted prohibited ok okay appropriate suitable'));
-  const ASKING = new Set(list('i we use read teach class'));                // optional too in a question: "can we read speak in class"
+  const QUESTION = new Set(list('is are was can could may banned ban allowed permitted prohibited'));
+  // optional too in a question: "can we read speak in class", "is the kite runner okay to teach"; title words otherwise ("A Suitable Boy")
+  const ASKING = new Set(list('i we use read teach class ok okay appropriate suitable'));
   const ROLE = new Set(list('jr sr dr mr sir dame prof rev author authors editor editors ed illustrator illustrators translator translators'));
   const PUBLISHER = new Set(list('company press publisher publishers books inc'));
   const FOREIGN_ART = new Set(list('le la les el los las il der die das'));
   const PLACEHOLDER = new Set(list('unknown unknownauthor anonymous anon various variousauthors variousartists multipleauthors ' +
     'noauthor unknownartist unknownartists na none nil notknown notlisted notstated notavailable tbd tba'));
   const EDITION_WORDS = new Set(list('edition ed edn anniversary'));
+  const SERIES_DESC = new Set(list('saga chronicles complete adventures stories mystery mysteries tales novels'));
 
   const UNITS = table({}), TENS = table({}), ORDS = table({});
   list('zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen ' +
@@ -65,10 +67,11 @@
   const FIELD_W = [3, 2, 1, 3, 0.5, 0.5];
   const FIELD_NAMES = ['title', 'author', 'memo', 'isbn', 'type', 'bannedBy'];
   const FIELD_ORDER = [F_T, F_A, F_I, F_M, F_Y, F_B];                                      // order of Hit.fields (g6)
-  // Hit kinds. exact-class = exact, alternate (incl. ordinal<->cardinal crossing), prefix.
-  const K_EXACT = 0, K_ALT = 1, K_ALTX = 2, K_PREFIX = 3, K_COMP = 4, K_FZ1 = 5, K_FZ2 = 6, K_LOOSE = 7;
-  const KIND_W = [1, 0.9, 0.75, 0.8, 0.9, 0.6, 0.4, 0.3];                                  // a crossing is the weakest exact-class hit
-  const KIND_CLASS = [3, 3, 3, 3, 2, 1, 1, 0];
+  // Hit kinds. exact-class = exact, alternate (incl. ordinal<->cardinal crossing), prefix, and a completion of the word being
+  // typed ("sevent" -> 7th), the weakest exact-class hit: below a crossing, which is below a literal prefix.
+  const K_EXACT = 0, K_ALT = 1, K_ALTX = 2, K_PREFIX = 3, K_COMP = 4, K_FZ1 = 5, K_FZ2 = 6, K_LOOSE = 7, K_PCOMP = 8;
+  const KIND_W = [1, 0.9, 0.75, 0.8, 0.9, 0.6, 0.4, 0.3, 0.7];
+  const KIND_CLASS = [3, 3, 3, 3, 2, 1, 1, 0, 3];
   const isExactish = k => k <= K_ALTX;                                                      // exact or through an alternate
   const hitValue = h => (h.f >= F_Y ? 30 : KIND_CLASS[h.k] * 10) + KIND_W[h.k] * FIELD_W[h.f];
 
@@ -166,8 +169,8 @@
       if (!m) continue;
       const rest = t.slice(ci + 1 + m[0].length);
       if (!REST_OK.test(rest)) continue;
-      // letter-range guard (AWO-8), only for the article A: "Animals, A-Z", "Seashells, A – Z"
-      if (m[1].toLowerCase() === 'a' && (/^[\p{Pd}\u2212][\p{L}\p{N}]/u.test(rest) || /^\s*[\p{Pd}\u2212]\s*\p{L}(?!\p{L})/u.test(rest))) continue;
+      // letter-range guard (AWO-8), only for the article A: "Animals, A-Z", "Seashells, A – Z"; letter pairs "Animals, A/Z", "A/V Edition"
+      if (m[1].toLowerCase() === 'a' && (/^[\p{Pd}\u2212][\p{L}\p{N}]/u.test(rest) || /^\s*[\p{Pd}\u2212/]\s*\p{L}(?!\p{L})/u.test(rest))) continue;
       return m[1][0].toUpperCase() + m[1].slice(1) + ' ' + head + rest;
     }
     return null;
@@ -193,7 +196,7 @@
   // its alternates [term, kind, explain?, numeric?]. Alternates are added, never replace the word, and are never re-read (PN-0).
   const WORD_RE = /[\p{L}\p{N}']+/gu;
   const DASH1 = /^[\p{Pd}\u2212\u2043]$/u;                        // a hyphen: one dash with word characters on both sides (b2)
-  const DASH_SP = /^\s*[\p{Pd}\u2212\u2043]\s*$/u;
+  const DASH_SP = /^\s*[\p{Pd}\u2212\u2043]\s*$/u, RANGE_SEP = /^\s*[\p{Pd}\u2212\u2043]\s*#?\s*$/u;   // "1 - 3", "#1-#3"
   const HAS_L = /\p{L}/u, ONLY_L = /^\p{L}+$/u, ONLY_D = /^\d+$/;
   const ROMAN_RE = /^(x{0,3})(ix|iv|v?i{0,3})$/;
   function romanValue(t) {
@@ -308,12 +311,12 @@
       W.push(x);
     }
     // (b5) FIX F8: 2+ single letters separated only by spaces or periods are ONE initials word: R.L. / R. L. / r l -> rl.
-    // "a" is an initial only when a period follows it or joins it to the letter before (A.I., U.S.A., A. A. Milne); a
-    // space-separated "a" stays the small word.
+    // "a" is an initial only when a period follows it or a bare period joins it to the letter before (A.I., U.S.A, A. A. Milne); a
+    // space-separated "a" stays the small word, after a letter's period too ("Vitamin C. A Guide", "Smith, B. A tree grows…").
     const size = {};
     for (const x of W) size[x.ch] = (size[x.ch] || 0) + 1;
     const single = x => x.w.length === 1 && x.letters && size[x.ch] === 1;
-    const isInit = i => single(W[i]) && (W[i].w !== 'a' || W[i].dot || (i > 0 && single(W[i - 1]) && W[i].brk.includes('.')));
+    const isInit = i => single(W[i]) && (W[i].w !== 'a' || W[i].dot || (i > 0 && single(W[i - 1]) && W[i].brk === '.'));
     const merged = [];
     for (let i = 0; i < W.length; i++) {
       if (isInit(i) && i + 1 < W.length && isInit(i + 1) && /^[\s.]+$/.test(W[i + 1].brk)) {
@@ -370,28 +373,29 @@
         break;
       }
     }
-    // (b6) FIX F7 label + number pairs -> '#book3', '#grade8' (pair namespace); (b6r) ranges "Books 4–6", "Volumes I–III" ->
-    // #book4..#book6; lists "Books 1 & 2", "Volumes 1, 2 and 3", "Parts One and Two" -> a pair term for each number
+    // (b6) FIX F7 label + number pairs -> '#book3', '#grade8' (pair namespace); (b6r) ranges "Books 4–6", "Volumes I–III", "#1-4",
+    // "#1 - #3" -> #book4..#book6; lists "Books 1 & 2", "Volumes 1, 2 and 3", "Parts One and Two" -> a pair term for each number
     W.pairs = [];
     for (let i = 0; i < W.length; i++) {
       const x = W[i];
       if (x.pair) continue;
       if (x.w === 'kindergarten') { addPair(W, 'grade', 0, i, i, i, null, null); continue; }
-      const key = LABELS[x.w];
-      const n = key && pairNumber(W, i + 1, key);
+      const hash = x.digits && !x.run && +x.num < 100 && /#\s*$/.test(x.brk);             // "#3": a book number without a label word
+      const key = hash ? 'book' : LABELS[x.w];
+      const n = key && (hash ? { v: +x.num, end: i } : pairNumber(W, i + 1, key));
       if (n) {
         let end = n.end, rng = null;
         const k = end + 1;
         if (k < W.length) {
           const to = /^(?:to|through|thru)$/.test(W[k].w);
-          const mm = DASH_SP.test(W[k].brk) ? pairNumber(W, k, key) : to ? pairNumber(W, k + 1, key) : null;
+          const mm = RANGE_SEP.test(W[k].brk) ? pairNumber(W, k, key) : to ? pairNumber(W, k + 1, key) : null;
           if (mm && !mm.roman === !n.roman && mm.v > n.v) { rng = { n: n.v, m: mm.v, k: !!n.k }; end = mm.end; }
         }
         if (!rng) {
           const list = [n.v];
           for (let e = end; e + 1 < W.length;) {
             const y = W[e + 1];
-            const nx = y.w === 'and' ? pairNumber(W, e + 2, key) : /^\s*[,\/+]\s*$/.test(y.brk) ? pairNumber(W, e + 1, key) : null;
+            const nx = y.w === 'and' ? pairNumber(W, e + 2, key) : /^\s*[,\/+]\s*#?\s*$/.test(y.brk) ? pairNumber(W, e + 1, key) : null;
             if (!nx || !nx.roman !== !n.roman || nx.v <= list[list.length - 1]) break;
             list.push(nx.v);
             end = e = nx.end;
@@ -399,7 +403,7 @@
           }
           if (list.length > 1) rng = { n: list[0], m: list[list.length - 1], k: !!n.k, list };
         }
-        addPair(W, key, n.v, i, i, end, rng, n);
+        addPair(W, key, n.v, hash ? -1 : i, i, end, rng, n);
         i = end;
         continue;
       }
@@ -408,7 +412,6 @@
         i++;
         continue;
       }
-      if (x.digits && !x.run && +x.num < 100 && /#\s*$/.test(x.brk)) addPair(W, 'book', +x.num, -1, i, i, null, null);   // "#3"
     }
     // (b11) 9/11 -> 911 (the only digit join)
     for (let i = 0; i + 1 < W.length; i++)
@@ -471,6 +474,7 @@
         if (/^97[89]\d{10}$/.test(d)) { pick = j; pd = d; break; }
         if (/^\d{9}[\dx]$/.test(d)) { pick = j; pd = d; }
       }
+      if (pick < 0 && /^\d{9}$/.test(g[i][0])) { pick = i; pd = g[i][0]; }                   // a lone 9-digit group: a lost leading 0
       if (pick < 0) { i++; continue; }
       add(pd, off + g[i].index, off + g[pick].index + g[pick][0].length);
       i = pick + 1;
@@ -551,9 +555,9 @@
       }
     }
     for (const p of W.pairs) {                                                             // (b6) pair namespace
-      const s = S(W[p.a]), e = E(W[p.b]), ni = p.li === p.b ? p.a : p.b;
-      for (const t of p.terms) post(ix, t, r, f, p.rng ? K_ALT : K_EXACT, s, e, ni, p.li >= 0 ? p.li : ni, true, 0);
-      doc.pairs.push({ key: p.key, v: p.v, rng: p.rng, f, s, e, wi: ni, wj: p.li >= 0 ? p.li : ni });
+      const h = p.li < 0 && st.s[W[p.a].s - 1] === '#', s = h ? st.a[W[p.a].s - 1] : S(W[p.a]), e = E(W[p.b]), ni = p.li === p.b ? p.a : p.b;   // "#1-4" with its #
+      for (const t of p.terms) post(ix, t, r, f, p.rng ? K_ALT : K_EXACT, s, e, ni, p.li >= 0 ? p.li : p.a, true, 0);
+      doc.pairs.push({ key: p.key, v: p.v, rng: p.rng, f, s, e, wi: ni, wj: p.li >= 0 ? p.li : p.a });
       if (!ix.pairKeyRows.has(p.key)) ix.pairKeyRows.set(p.key, new Set());
       ix.pairKeyRows.get(p.key).add(r);
     }
@@ -631,17 +635,24 @@
     });
     for (const p of TW.pairs) {
       for (let k = p.a; k <= p.b; k++) used.add(k);
-      if (p.key !== 'edition') items.push({ keys: p.terms, wis: range(p.a, p.b) });
+      if (p.key !== 'edition') items.push({ keys: p.terms, wis: range(p.a, p.b), pair: true });
     }
     for (const run of TW.runs) {
       if (range(run.i, run.j).some(k => used.has(k))) continue;
       for (let k = run.i; k <= run.j; k++) used.add(k);
-      items.push({ keys: run.vals, wis: range(run.i, run.j) });
+      items.push({ keys: run.vals, wis: range(run.i, run.j), run: true });
     }
     TW.forEach((x, i) => {
       if (!used.has(i) && !SMALL.has(x.w) && !FORMAT.has(x.w) && !markers.has(i)) items.push({ keys: [x.num !== null ? x.num : x.w], wis: [i] });
     });
     doc.items = items;
+    // (e5d) a whole-series row's name: its title words without volume numbers or descriptors ("Twilight Saga collection" -> twilight,
+    // "Nancy Drew Mystery Stories - all titles" -> nancy drew, "The Chronicles of Narnia box set" -> narnia)
+    if (doc.series) {
+      const name = items.filter(it => !it.pair && !it.run);
+      const core = name.filter(it => !SERIES_DESC.has(TW[it.wis[0]].w));
+      doc.seriesName = core.length ? core : name;
+    }
     doc.allSmall = TW.length > 0 && TW.every(x => SMALL.has(x.w));
     const gtk = TW.filter(x => !SMALL.has(x.w)).map(x => x.w).join(' ') || TW.map(x => x.w).join(' ');
     doc.gtk = gtk;
@@ -803,10 +814,12 @@
     const rest = lab.replace(/[\u0001\u0002]/g, ' ').trim();
     const nDigits = (rest.match(/\d/g) || []).length, joined = rest.replace(/[\s-]/g, '');
     // the whole query is one ISBN (or its start): one group, or groups after a label, starting 978/979, or making a complete
-    // ISBN without a year; never more than 13 characters (two ISBNs, an ISBN and a year range, "101 451" go to the mixed path)
-    if (/^[\d\s-]+x?$/.test(rest) && nDigits >= 6 && joined.length <= 13 && !/^(?:19|20)\d\d\s*(?:[-\/]\s*(?:\d{0,3}|(?:19|20)\d\d)|\s(?:19|20)\d\d)$/.test(rest)) {
-      const groups = rest.split(/\s+/);
-      if (groups.length === 1 || lab.includes('\u0002') || /^97[89]/.test(groups[0]) || (completeIsbn(joined) && !rest.split(/[\s-]+/).some(isYearTok))) {
+    // ISBN without a year. Past 13 characters only a mistyped ISBN is: one group, or groups starting 978/979 that are not each a
+    // complete ISBN or a year (two ISBNs, an ISBN and a year range, "101 451" go to the mixed path)
+    const groups = rest.split(/\s+/), isbnOrYear = g => completeIsbn(g.replace(/-/g, '')) || /^(?:19|20)\d\d(?:[-\/](?:\d{2}|(?:19|20)\d\d))?$/.test(g);
+    if (/^[\d\s-]+x?$/.test(rest) && nDigits >= 6 && !/^(?:19|20)\d\d\s*(?:[-\/]\s*(?:\d{0,3}|(?:19|20)\d\d)|\s(?:19|20)\d\d)$/.test(rest)) {
+      if (joined.length <= 13 ? groups.length === 1 || lab.includes('\u0002') || /^97[89]/.test(groups[0]) || (completeIsbn(joined) && !rest.split(/[\s-]+/).some(isYearTok))
+        : groups.length === 1 || (/^97[89]/.test(groups[0]) && !groups.every(isbnOrYear))) {
         Q.isbnQuery = true;
         Q.digits = joined;
         if (completeIsbn(Q.digits)) Q.isbn.push({ kind: 'isbn', key: isbnKey(Q.digits), d: Q.digits, text: Q.digits });
@@ -852,7 +865,7 @@
 
   // parseQuery -> Q: the query's words (W) and units. A unit is one thing the query asks for: a word, a number run, a label
   // pair or range, a year range, an ISBN or "et al"; it is required or optional (d8, d9).
-  function parseQuery(text, unfinishedIn) {
+  function parseQuery(text, unfinishedIn, noPartial) {
     const moved = moveArticle(text);                                                         // (d3) "7th Knot, The" ≡ "The 7th Knot"
     const folded = fold(moved === null ? text : moved);
     let q = folded;
@@ -890,12 +903,13 @@
       else if (b.brk === ' ' && isYearWord(b) && +b.w === +a.w + 1) end = +b.w;
       if (end >= +a.w) { Q.years.push(unit('year', i, j, { start: +a.w, end })); i = j; }
       else if (unfinishedIn && i + 1 === last && b.digits && b.w.length <= 3 && (DASH_SP.test(b.brk) || /^\s*\/\s*$/.test(b.brk))) {
-        Q.years.push(unit('year', i, i + 1, { start: +a.w, end: null }));                  // "2023-202": a range still being typed
+        if (noPartial) unit('year', i + 1, i + 1, { start: null, end: null });              // "2001-2" alone: 2001 stays a title word
+        else Q.years.push(unit('year', i, i + 1, { start: +a.w, end: null }));             // "2023-202": a range still being typed
         i++;
       }
     }
     const tail = W.length ? t2.slice(W[last].e) : '';                                      // "orwell 2023-": the same, before its end year
-    if (unfinishedIn && isYearWord(W[last]) && !W[last].unit && /^\s*[\/\p{Pd}\u2212]\s*$/u.test(tail)) Q.years.push(unit('year', last, last, { start: +W[last].w, end: null }));
+    if (unfinishedIn && !noPartial && isYearWord(W[last]) && !W[last].unit && /^\s*[\/\p{Pd}\u2212]\s*$/u.test(tail)) Q.years.push(unit('year', last, last, { start: +W[last].w, end: null }));
     // "et al" and a trailing "and others": one optional unit
     for (let i = 0; i + 1 < W.length; i++) if (W[i].w === 'et' && W[i + 1].w === 'al' && !W[i].unit) Q.etal = unit('etal', i, i + 1);
     if (W.length >= 2 && W[last - 1].w === 'and' && W[last].w === 'others' && !W[last].unit) Q.etal = unit('etal', last - 1, last);
@@ -932,7 +946,12 @@
     for (const u of Q.units) u.req = (u.kind === 'word' && !u.small && !u.soft && !u.partialIsbn) || u.kind === 'run' || (u.kind === 'pair' && !u.soft);
     if (W.length && W.every(x => SMALL.has(x.w)) && !Q.isbn.length) { Q.state = 'stop'; Q.stopKey = W.map(x => x.w).join(' '); return Q; }
     if (!Q.units.some(u => u.req)) for (const u of Q.units) if (u.soft) u.req = true;        // FIX F5: only soft words -> they are required
-    if (!Q.units.some(u => u.req) && !Q.hasCompleteIsbn) { Q.state = 'stopwordsOnly'; return Q; }
+    if (!Q.units.some(u => u.req) && !Q.hasCompleteIsbn) {
+      // a lone year followed by a dash ("1984-", "2001-2") is a title word, not a year range being typed, when nothing else is asked
+      if (!noPartial && Q.years.some(y => y.end === null)) return parseQuery(text, unfinishedIn, true);
+      Q.state = 'stopwordsOnly';
+      return Q;
+    }
     for (const u of Q.units) {
       if (u.kind !== 'word' || !u.req) continue;
       const x = u.x;
@@ -964,7 +983,7 @@
         }
         if (!vals.size) continue;
         const units = [...new Set(W.slice(s, lastIdx + 1).map(x => x.unit))].filter(v => v && (v.kind === 'word' || v.kind === 'run') && v.req);
-        if (units.length) Q.tails.push({ units, forms: [...vals] });
+        if (units.length) Q.tails.push({ units, forms: [...vals], text: t2.slice(W[s].s, W[lastIdx].e) + '\u2026' });
         break;
       }
     }
@@ -1133,17 +1152,20 @@
       for (const dp of ix.docs[r].pairs) if (dp.key === u.key && (!vals || !vals.has(dp.v) || dp.rng)) addHit(map, { r, f: dp.f, k: K_LOOSE, s: dp.s, e: dp.e, wi: dp.wi, wj: dp.wj, why: 'lo', q: u.text, n: 0 });
     }
   }
-  // the completions of the word being typed (u.pforms, e1): prefix hits on the number or abbreviation the word starts
+  // the completions of the word being typed (u.pforms, e1): hits on the number or abbreviation the word starts, explained
+  // ("sevent… = 7") and highlighted only when the word matched nothing literally in the row
   function lookupCompletions(ix, u, map, only) {
     for (const t of u.pforms) for (const p of ix.terms.get(t) || []) {
       if ((only && !only.has(p.r)) || p.f > F_M || p.k === K_COMP) continue;
-      addHit(map, mkHit(p, K_PREFIX, '', u.text, 0));
+      addHit(map, mkHit(p, K_PCOMP, 'eq', u.text + '\u2026', 0));
     }
   }
   function lookupUnit(ix, Q, u, only, map) {
     map = map || new Map();
     if (u.kind === 'word') {
-      lookupForms(ix, u, u.forms, map, only, !u.req);                                       // optional words: exact / alternate only
+      // no Roman numeral for a word that names an author in the list ("xi jinping" is not 11, E2-15)
+      const forms = u.x && u.x.roman && (ix.terms.get(u.w) || []).some(p => p.f === F_A && p.k === K_EXACT) ? u.forms.filter(f => f[0] !== String(u.x.roman)) : u.forms;
+      lookupForms(ix, u, forms, map, only, !u.req);                                         // optional words: exact / alternate only
       if (u.prefix) lookupPrefix(ix, u, u.w, map, only);
       if (u.prefix && u.pforms) lookupCompletions(ix, u, map, only);
       if (u.fuzzy) lookupFuzzy(ix, u, map, only);
@@ -1177,29 +1199,60 @@
     for (const t of Q.tails) {                                                              // (e1) number words ending in the word being typed
       const m = new Map();
       lookupForms(ix, t.units[0], t.forms.map(v => [v, K_ALT, 0, ALL_F]), m, null, true);
-      for (const E of m.values()) for (const h of E.hits) if (h.f <= F_M) for (const u of t.units) addHit(u.map, Object.assign({}, h, { k: K_PREFIX, why: '', n: 0, q: u.text }));
+      for (const E of m.values()) for (const h of E.hits) if (h.f <= F_M) for (const u of t.units) addHit(u.map, Object.assign({}, h, { k: K_PCOMP, why: 'eq', n: 0, q: t.text }));
     }
     const cand = new Set();
     for (const u of Q.units.concat(Q.isbn)) if (u.req || u.format || u.kind === 'isbn') for (const [r, E] of u.map) if (E.c) cand.add(r);
     for (const u of Q.units) if (!u.req && !u.format && u.kind !== 'isbn' && u.kind !== 'year' && u.kind !== 'etal') lookupUnit(ix, Q, u, cand, u.map);
-    // (e4) author words: the name after a standalone "by" ("holes by louis sachar", up to the next small word), or a word with any
-    // hit in an Author field, a misspelt one too ("george orwel"); (e6) one-word demotion; (e5e) two-author segments
+    // (e4) author words: the name after a standalone "by" ("holes by louis sachar", up to the next small word), a word that hit an
+    // Author field exactly, through an alternate or as a prefix, or a misspelt one beside a word that hit the same Author cell
+    // ("george orwel"; not "hunger games" for Erin Hunter and Tim James); (e6) one-word demotion; (e5e) two-author segments
     const byName = new Set();
     Q.W.forEach((x, i) => { if (x.w === 'by') for (let k = i + 1; k < Q.W.length && !SMALL.has(Q.W[k].w); k++) byName.add(k); });
+    Q.ordered = Q.units.filter(u => u.a >= 0).sort((a, b) => a.a - b.a);
+    const inAuthor = (v, r, exact) => { const e = v && v.map && v.map.get(r); return !!e && e.hits.some(h => h.f === F_A && (exact ? KIND_CLASS[h.k] === 3 : h.k !== K_LOOSE)); };
+    const content = Q.ordered.filter(v => !v.small);
     for (const u of Q.req) {
-      u.authorWord = byName.has(u.a) || [...u.map.values()].some(E => E.hits.some(h => h.f === F_A && h.k !== K_LOOSE));
+      const i = content.indexOf(u), nb = [content[i - 1], content[i + 1]];
+      u.authorWord = byName.has(u.a) || [...u.map.keys()].some(r => inAuthor(u, r, true)) ||
+        [...u.map.keys()].some(r => inAuthor(u, r, false) && nb.some(v => inAuthor(v, r, false)));
+    }
+    // (e4) a probable author name: 2-3 letter words at the start or end of the query that no cell has ("george orwell 1984" when no
+    // row names Orwell). They may miss on a row with no author that a real word anchors (judge).
+    const reqOrd = Q.ordered.filter(u => u.req), unknown = u => u.kind === 'word' && u.x.letters && !u.short && !u.authorWord &&
+      ![...u.map.values()].some(E => E.c && KIND_CLASS[E.c.k] === 3);
+    for (const side of [reqOrd, reqOrd.slice().reverse()]) {
+      let n = 0;
+      while (n < side.length && unknown(side[n])) n++;
+      if (n >= 2 && n <= 3 && n < side.length) for (let k = 0; k < n; k++) side[k].nameGuess = true;
     }
     // (d9) role and publisher words are optional beside an author word, or when no title in the list has them; otherwise a row
     // needs them like any title word ("mr. men" is not Spider-Man, "company of wolves" is not The Wolves of…)
     Q.titled = Q.units.filter(u => u.kind === 'word' && u.soft && !u.req && (ROLE.has(u.w) || PUBLISHER.has(u.w)) && !FORMAT.has(u.w) &&
       !QUESTION.has(u.w) && u.forms.some(([t]) => (ix.terms.get(t) || []).some(p => p.f === F_T)));
+    // (d9) when only one word is required, a format or question word that a listed title has right beside it, in the query's order,
+    // is a title word there ("the illustrated man", "ban this book", "the banned book club"): every row needs it. Not in the query's
+    // trailing run of optional words, which describes the copy or asks the question ("1984 paperback", "is 1984 banned"); and with
+    // two or more required words they tell the title apart ("guinness book of world records" still finds "Guinness World Records").
+    Q.phrased = [];
+    const cont = Q.req.length === 1 ? Q.ordered.filter(v => !v.small) : [], need = new Set(cont.filter(v => v.req));
+    let tail = cont.length;
+    while (tail > 0 && !cont[tail - 1].req) tail--;
+    const phrasable = u => u.kind === 'word' && u.soft && !u.req && !u.x.edition && (FORMAT.has(u.w) || QUESTION.has(u.w) || ASKING.has(u.w));
+    for (let grew = true; grew;) {
+      grew = false;
+      for (let i = 0; i < tail; i++) {
+        const u = cont[i];
+        if (need.has(u) || !phrasable(u)) continue;
+        if ([[cont[i - 1], false], [cont[i + 1], true]].some(([v, after]) => v && need.has(v) && titlePhrase(ix, u, v, after))) { need.add(u); Q.phrased.push(u); grew = true; }
+      }
+    }
     Q.demote = null;
     if (Q.req.length === 1) {
       let strong = false, fz1 = false;
       for (const E of Q.req[0].map.values()) if (E.c) { if (KIND_CLASS[E.c.k] >= 2) strong = true; else if (E.c.k === K_FZ1) fz1 = true; }
       Q.demote = strong ? 'fuzzy' : fz1 ? 'fz2' : null;
     }
-    Q.ordered = Q.units.filter(u => u.a >= 0).sort((a, b) => a.a - b.a);
     Q.segments = null;
     if (Q.W.length) {
       const segs = [[]];
@@ -1221,6 +1274,21 @@
     return out;
   }
 
+  // Whether a listed title has a form of the query word u with the query word v right after it (after) or right before it, small
+  // words aside ("illustrated" then "man": The Illustrated Man). v may be the word being typed.
+  function titlePhrase(ix, u, v, after) {
+    if (v.kind !== 'word') return false;
+    const vf = new Set(v.forms.map(f => f[0]));
+    for (const [t] of u.forms) for (const p of ix.terms.get(t) || []) {
+      if (p.f !== F_T || p.k === K_COMP) continue;
+      const fd = ix.docs[p.r].fw[F_T], step = after ? 1 : -1;
+      let k = after ? Math.max(p.wi, p.wj) + 1 : Math.min(p.wi, p.wj) - 1;
+      while (k >= 0 && k < fd.W.length && fd.pos[k] < 0) k += step;
+      const y = fd.W[k];
+      if (y && (vf.has(y.w) || y.alts.some(a => vf.has(a[0])) || (v.prefix && y.w.startsWith(v.w)))) return true;
+    }
+    return false;
+  }
   // The non-SMALL query word beside u that hit the row's Author exactly, through an alternate or as a prefix (e3), or with any
   // hit (a similar spelling too) when fuzzy is set.
   function besideAuthor(Q, u, r, fuzzy) {
@@ -1232,6 +1300,12 @@
     return null;
   }
   const hitSpan = h => (h.wi <= h.wj ? [h.wi, h.wj] : [h.wj, h.wi]);
+  // (f2, GEN-4) an anchor that says little on its own: a number under 100 (digits, a number word, a Roman numeral), a label pair or a
+  // single letter, typed or reached in the cell ("second" on the 2 of "Volume 2"). Possible rows anchored by a real word rank above
+  // rows that share only "2" with "maus 2".
+  const smallNum = x => !!x && ((x.num !== null && +x.num < 100) || !!x.roman);
+  const weakAnchor = (u, doc, h) => u.kind === 'pair' || (u.kind === 'run' && +u.run.vals[0] < 100) ||
+    (u.kind === 'word' && !!u.x && (smallNum(u.x) || (u.x.letters && u.w.length === 1))) || (h.f <= F_M && smallNum(doc.fw[h.f].W[h.wi]));
   const isSubseq = (a, b) => { let i = 0; for (const ch of b) if (ch === a[i]) i++; return !!a && i === a.length; };
   function judge(ix, Q, r) {
     const doc = ix.docs[r], E = u => (u.map && u.map.get(r)) || null;
@@ -1266,8 +1340,10 @@
       if (nb) exempt.push([u, nb]); else req.push(u);
     }
     for (const u of Q.titled) if (!besideAuthor(Q, u, r)) req.push(u);                       // (d9) role words used as title words
+    for (const u of Q.phrased) req.push(u);                                                  // (d9) format or question words in a title
     // typed given names whose first letters spell the row's initials, next to its matched surname: "robert lawrence stine" ->
-    // R.L. Stine (Close, explained)
+    // R.L. Stine (Close, explained). All of them, or two or more in order ("john ronald tolkien"): one word that shares a first
+    // letter is another work ("roverandom tolkien", "ransom stine")
     let initialsWhy = '';
     if (usedA.size && AW.some(x => x.initials)) {
       const list = Q.ordered.filter(v => !v.small);
@@ -1275,7 +1351,8 @@
       const pos = miss.map(u => list.indexOf(u));
       const nextTo = v => { const e = v && E(v); return !!e && e.hits.some(h => h.f === F_A && KIND_CLASS[h.k] === 3); };
       if (miss.length && pos.every((p, k) => !k || p === pos[k - 1] + 1) && (nextTo(list[pos[0] - 1]) || nextTo(list[pos[pos.length - 1] + 1]))) {
-        const iw = AW.findIndex((x, i) => x.initials && !usedA.has(i) && isSubseq(miss.map(u => u.w[0]).join(''), x.initials.join('')));
+        const typed = miss.map(u => u.w[0]).join('');
+        const iw = AW.findIndex((x, i) => x.initials && !usedA.has(i) && (typed === x.initials.join('') || (typed.length >= 2 && isSubseq(typed, x.initials.join('')))));
         if (iw >= 0) {
           for (const u of miss) req.splice(req.indexOf(u), 1);
           const end = A.st.b[AW[iw].e - 1];
@@ -1283,20 +1360,22 @@
         }
       }
     }
-    let gate = false, allHit = true, allExact = true, spelled = false, loose = false, anchors = 0;
+    let gate = false, allHit = true, allExact = true, spelled = false, loose = false, anchors = 0, strong = 0;
     const unanchored = [];
     for (const u of req) {
       const e = E(u), c = e && e.c;
       if (c) gate = true;
       if (!c && !(e && e.m)) { allHit = false; allExact = false; unanchored.push(u); continue; }
       if (!c) { unanchored.push(u); continue; }                                            // a META hit completes as exact-class
-      if (KIND_CLASS[c.k] >= 2) anchors++; else unanchored.push(u);
+      if (KIND_CLASS[c.k] >= 2) { anchors++; if (!weakAnchor(u, doc, c)) strong++; } else unanchored.push(u);
       if (c.k === K_LOOSE) { loose = true; allExact = false; } else if (KIND_CLASS[c.k] < 3) { spelled = true; allExact = false; }
     }
     if (!gate) gate = Q.fmt.some(u => { const e = E(u); return !!(e && e.c); });           // (e5) content gate
     const isbnExact = Q.isbn.some(u => u.map && u.map.has(r)), R = req.length, why = [];
-    // title words hit by any non-SMALL unit (e5c): word index -> matched exactly / through an alternate?
-    const tHit = new Map();
+    // title words hit by any non-SMALL unit (e5c): word index -> matched exactly / through an alternate?; the words of the title's
+    // label pairs hit by a pair of the query or a number typed as digits ("vol 4" or "4", never the "one" of "One-Punch Man vol 4"
+    // on "Vol. 1"); title words matched literally (a one-word series name)
+    const tHit = new Map(), pHit = new Map(), tLit = new Set();
     let authorWordHit = false, surnameHit = false;
     for (const u of Q.units) {
       const e = !u.small && E(u);
@@ -1304,30 +1383,33 @@
         if (h.k === K_LOOSE) continue;
         const [a, b] = hitSpan(h);
         if (h.f === F_T) for (let k = a; k <= b; k++) tHit.set(k, tHit.get(k) || isExactish(h.k));
+        if (h.f === F_T && (u.kind === 'pair' || (u.kind === 'word' && (!u.x || u.x.digits)))) for (let k = a; k <= b; k++) pHit.set(k, pHit.get(k) || isExactish(h.k));
+        if (h.f === F_T && h.k === K_EXACT) for (let k = a; k <= b; k++) tLit.add(k);
         if (h.f === F_A && KIND_CLASS[h.k] === 3 && doc.authorWordIdx.has(a)) authorWordHit = true;
         if (h.f === F_A && KIND_CLASS[h.k] === 3) for (let k = a; k <= b; k++) if (doc.surnameIdx.has(k)) surnameHit = true;
       }
     }
-    const T = doc.items;
+    const T = doc.items, itemHit = it => it.wis.some(k => (it.pair ? pHit : tHit).has(k)), itemEx = it => it.wis.some(k => (it.pair ? pHit : tHit).get(k));
     let titleInside = false;
     if (T.length && !doc.allSmall) {
-      const hit = T.map(it => it.wis.some(k => tHit.has(k))), ex = T.map(it => it.wis.some(k => tHit.get(k)));
-      titleInside = hit.every(Boolean) && (T.length >= 2 ? ex.some(Boolean) : ex[0] && authorWordHit);   // FIX F12, F15
+      titleInside = T.every(itemHit) && (T.length >= 2 ? T.some(itemEx) : itemEx(T[0]) && authorWordHit);   // FIX F12, F15
     }
     const demoted = !!Q.demote && R === 1 && (() => { const e = E(req[0]), c = e && e.c; return !!c && (c.k === K_FZ2 || (c.k === K_FZ1 && Q.demote === 'fuzzy')); })();
     let tier = null, pinned = false;
     if (isbnExact || (gate && R && allHit && allExact)) tier = 'match';                    // (e5a)
     else if (gate && R && allHit && !loose && spelled && !demoted) tier = 'close';          // (e5b)
     else if (titleInside) { tier = 'close'; why.push('the whole listed title is in your search'); }   // (e5c)
-    if (doc.series) {                                                                      // (e5d) a row covering a whole series
-      // lifted by its series name read as the reverse check reads a title (every word hit, one exactly; a one-word name also needs
-      // an author word), or by its author's surname (exactly, through an alternate or as a prefix; not a shared given name)
-      const byName = T.length > 0 && T.every(it => it.wis.some(k => tHit.has(k))) && T.some(it => it.wis.some(k => tHit.get(k))) &&
-        (T.length >= 2 || authorWordHit);
-      if (byName || surnameHit) {
-        pinned = true;
+    if (doc.series && !loose) {                                                            // (e5d) a row covering a whole series
+      // pinned by its series name read as the reverse check reads a title (every word hit, one exactly; a one-word name also needs
+      // an author word), or by its author's surname (exactly, through an alternate or as a prefix; not a shared given name); a
+      // one-word name typed as written lifts it unpinned ("goosebumps say cheese and die"; not "the lovely bones" for "Bone series",
+      // and "Shine Series" stays below "60 Seconds to Shine"). Never when the query names another of its volumes.
+      const N = doc.seriesName, name = N.length > 0 && N.every(itemHit) && N.some(itemEx);
+      const byName = name && (N.length >= 2 || authorWordHit), byWord = name && N.length === 1 && N[0].wis.some(k => tLit.has(k));
+      if (byName || surnameHit || byWord) {
+        pinned = byName || surnameHit;
         if (tier !== 'match') tier = 'close';
-        why.unshift(`covers a whole series: its ${byName ? 'series name' : 'author'} is in your search`);
+        why.unshift(`covers a whole series: its ${byName || byWord ? 'series name' : 'author'} is in your search`);
       }
     }
     if (!tier) {                                                                           // (e5e) Possible
@@ -1336,10 +1418,10 @@
         const core = seg.filter(u => !u.short);
         if (core.length && core.every(u => { const e = E(u); return e && e.hits.some(h => h.f === F_A && KIND_CLASS[h.k] === 3); })) k++;
       }
-      if (anchors >= 1 && doc.authorless && unanchored.length && unanchored.every(u => u.authorWord)) { tier = 'possible'; why.push('author not listed'); }
+      if (anchors >= 1 && doc.authorless && unanchored.length && unanchored.every(u => u.authorWord || (u.nameGuess && strong >= 1))) { tier = 'possible'; why.push('author not listed'); }
       else if (k >= 1) { tier = 'possible'; why.push(`matched ${k} of ${Q.segments.length} authors`); }
       else if (anchors >= 1 && anchors * 2 >= R) { tier = 'possible'; why.push(`matched ${anchors} of ${R} words`); }
-      else if (doc.authorless && anchors >= 1 && unanchored.length <= 3 && T.length && !doc.allSmall && T.every(it => it.wis.some(k => tHit.get(k)))) {
+      else if (doc.authorless && anchors >= 1 && unanchored.length <= 3 && T.some(it => !it.pair && !it.run) && !doc.allSmall && T.every(itemEx)) {
         tier = 'possible'; why.push('author not listed');                                  // "holes louis sachar": the whole title, no author
       }
       else if (demoted) tier = 'possible';
@@ -1349,7 +1431,7 @@
     if (initialsWhy) { if (tier === 'match') tier = 'close'; why.push(initialsWhy); }
     // ranking data (f2)
     if (!doc.wiItem) { doc.wiItem = []; T.forEach((it, k) => it.wis.forEach(wi => { doc.wiItem[wi] = k; })); }
-    const meaningful = Q.req.filter(u => u.kind !== 'isbn');
+    const meaningful = Q.req.concat(Q.phrased.filter(u => !FORMAT.has(u.w))).filter(u => u.kind !== 'isbn');   // as doc.items reads a title
     let titleEq = false;
     if (meaningful.length && meaningful.length === T.length) {
       const opts = meaningful.map(u => { const e = E(u), s = new Set(); if (e) for (const h of e.hits) if (h.f === F_T && isExactish(h.k)) { const [a, b] = hitSpan(h); for (let x = a; x <= b; x++) if (doc.wiItem[x] !== undefined) s.add(doc.wiItem[x]); } return [...s]; });
@@ -1387,7 +1469,7 @@
       const e = E(u);
       if (!(e && (e.c || e.m)) && !(typing(u) && !givenLeft) && !isSubseq(typedInitials(u), givenOf(nb))) givenNamesDiffer = true;
     }
-    return { r, doc, tier, why, pinned, Q, isbnExact, titleEq, author1: author1 && Q.req.length === 1, year, anchors, inOrder,
+    return { r, doc, tier, why, pinned, Q, isbnExact, titleEq, author1: author1 && Q.req.length === 1, year, anchors, strong, inOrder,
       authorUnits: Q.req.length > 1 ? authorUnits : 0, optMatched, quality, givenNamesDiffer, via: '', demoted, spelled: spelled && !titleInside, titleInside };
   }
   function perfectMatch(opts, n) {                                                         // bipartite: every unit gets its own title word
@@ -1418,13 +1500,15 @@
     return { text, truncated: false };
   }
   // (d13) alias widening: a complete alias name in the query is replaced by each other name of its group (8 at most). The name's
-  // last word may be the word being typed (3+ letters: "daniel han"); after a comma the words may come in any order ("Handler, Daniel").
+  // last word may be the word being typed (3+ letters: "daniel han"), unless it is already a whole alias name ("wwi" is not the start
+  // of "wwii"); after a comma the words may come in any order ("Handler, Daniel").
   function aliasQueries(ix, Q, unfinished) {
     const out = [], W = Q.W.filter(x => !SMALL.has(x.w)), lastW = Q.W[Q.W.length - 1];
+    const whole = win => ix.aliases.some(g => g.some(n => n.key.length === win.length && n.key.every((w, j) => win[j].w === w)));
     for (const group of ix.aliases) for (const name of group) {
       const k = name.key;
       for (let i = 0; i + k.length <= W.length && out.length < 8; i++) {
-        const win = W.slice(i, i + k.length), typing = unfinished && win[k.length - 1] === lastW && lastW.w.length >= 3;
+        const win = W.slice(i, i + k.length), typing = unfinished && win[k.length - 1] === lastW && lastW.w.length >= 3 && !whole(win);
         const same = k.every((w, j) => win[j].w === w || (typing && j === k.length - 1 && w.startsWith(win[j].w)));
         const sorted = a => a.slice().sort().join(' ');
         if (!same && !(k.length >= 2 && win.slice(1).some(x => x.brk.includes(',')) && sorted(win.map(x => x.w)) === sorted(k))) continue;
@@ -1472,8 +1556,8 @@
       const e = u.map && u.map.get(o.r);
       if (!e || !e.c) continue;
       const cls = KIND_CLASS[e.c.k];                                                       // only the unit's best kind of hit
-      for (const h of e.hits) {                            // an ordinal<->cardinal crossing only when nothing better matched
-        if (h.f <= F_I && KIND_CLASS[h.k] === cls && !(h.k === K_ALTX && e.c.k !== K_ALTX)) (u.small ? small : byField[h.f]).push(h);
+      for (const h of e.hits) {                            // an ordinal<->cardinal crossing or a completion only when nothing better matched
+        if (h.f <= F_I && KIND_CLASS[h.k] === cls && !((h.k === K_ALTX || h.k === K_PCOMP) && e.c.k !== h.k)) (u.small ? small : byField[h.f]).push(h);
       }
     }
     for (const h of small) if (byField[h.f].some(x => Math.abs(x.wi - h.wi) === 1 || Math.abs(x.wj - h.wi) === 1)) byField[h.f].push(h);
@@ -1507,8 +1591,9 @@
     return FIELD_ORDER.filter(f => seen.has(f)).map(f => FIELD_NAMES[f]);
   }
   // (f2) sort key, larger first; ties by row id. In main, Match hits come before Close hits (PRD: ranked in tiers, then within a tier).
+  // In Possible, rows with more real-word anchors come first, then more anchors.
   const rankKey = (o, main) => [main && o.pinned ? 1 : 0, main ? TIER_RANK[o.tier] : 0, o.isbnExact ? 1 : 0, o.via ? 0 : 1, o.titleEq ? 1 : 0, o.author1 ? 1 : 0,
-    o.year ? 1 : 0, main ? 0 : o.anchors || 0, o.inOrder || 0, o.authorUnits || 0, o.optMatched || 0, o.quality || 0];
+    o.year ? 1 : 0, main ? 0 : o.strong || 0, main ? 0 : o.anchors || 0, o.inOrder || 0, o.authorUnits || 0, o.optMatched || 0, o.quality || 0];
   function ranked(list, main) {
     const keyed = list.map(o => ({ o, k: rankKey(o, main) }));
     keyed.sort((a, b) => { for (let i = 0; i < a.k.length; i++) if (a.k[i] !== b.k[i]) return b.k[i] - a.k[i]; return a.o.doc.id - b.o.doc.id; });
@@ -1554,6 +1639,7 @@
     }
     for (const a of Q.W.length ? aliasQueries(ix, Q, unfinished) : []) {                               // (d13) alias widening
       for (const [r, o] of evaluate(ix, a.text, unfinished && !a.atEnd).rows) {
+        if (o.tier === 'possible' && !o.strong) continue;                                   // not a row that shares only the 2 of "WW2"
         const b = rows.get(r);
         if (!b || TIER_RANK[o.tier] > TIER_RANK[b.tier]) rows.set(r, Object.assign({}, o, { via: 'alias', why: [`via alias: ${a.typed} \u2192 ${a.name}`].concat(o.why) }));
       }

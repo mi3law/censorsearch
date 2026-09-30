@@ -2,7 +2,8 @@
 //   1. unit tests: fold, tokenizer alternates, ISBNs, display titles, splitLines, highlights (synthetic rows only);
 //   2. regression: the 180 prototype/queries.js queries on the sample rows, with the PRD overrides of test/prd-cases.js;
 //   3. PRD acceptance: every case of test/prd-cases.js, one test per case;
-//   4. review fixes (invented rows only).
+//   4. review fixes (invented rows only);
+//   5. review round 2 fixes (invented rows only). test/realistic.test.js adds the realistic generalization list.
 // Suite 2 needs the gitignored sample .xlsx in the repo root and skips with a message when it is absent. Without it (as in CI),
 // suite 3 still runs every case that names only synthetic rows, on the synthetic rows alone (COV-5).
 'use strict';
@@ -664,4 +665,179 @@ test('highlights cover a trailing combining accent (E4-13)', () => {
 test('ISBN no-match hint when every row has an ISBN (BROWSER-5)', () => {
   const ix = mini([{ id: 'I1', title: 'Harbor Nights', isbn: '9780306406157' }, { id: 'I2', title: 'Quiet Bay', isbn: '9781451673319' }]);
   assert.deepEqual(E.search('9780141036144', ix).hints.map(h => h.text), ['No ISBN match. Search the title and author too.']);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// 5. Review round 2 fixes: invented rows only
+// ---------------------------------------------------------------------------------------------------------------
+test('"ok", "okay", "suitable" and "appropriate" are title words outside a question (ER-01)', () => {
+  const ix = mini([{ id: 'Q1', title: 'Suitable Boy, A', author: 'Vikram Seth' }, { id: 'Q2', title: 'The Boy in the Striped Pyjamas', author: 'John Boyne' },
+    { id: 'Q3', title: 'The Boy Next Door', author: 'Meg Cabot' }, { id: 'Q4', title: 'Okay for Now', author: 'Gary D. Schmidt' }, { id: 'Q5', title: 'Now Is the Time for Running' }]);
+  let r = E.search('a suitable boy', ix);
+  assert.deepEqual([ids(r.main), ids(r.possible).sort()], [['Q1'], ['Q2', 'Q3']]);
+  r = E.search('okay for now', ix);
+  assert.deepEqual([ids(r.main), ids(r.possible)], [['Q4'], ['Q5']]);
+  assert.deepEqual(ids(E.search('is a suitable boy banned', ix).main), ['Q1']);         // optional in a question, but still the title's word
+  assert.equal(tierIn(E.search('is the boy next door okay to read', ix), 'Q3'), 'match');
+});
+test('aliases.json: the WW2 forms add no rows that share only a number, and "wwi" is not the start of "wwii" (ER-02)', () => {
+  const ix = mini([{ id: 'W1', title: 'World War II: A Visual History' }, { id: 'W2', title: '60 Seconds of Rain Volume 2' }, { id: 'W3', title: 'Phonics Grade 1' },
+    { id: 'W4', title: '2nd Helping of Porridge, A' }, { id: 'W5', title: 'WWI Trench Letters' }], { aliases: require('../aliases.json') });
+  for (const q of ['wwii', 'world war 2', 'world war two', 'wwi', 'world war one', 'first world war']) for (const enter of [false, true]) {
+    const r = E.search(q, ix, { enter });
+    assert.deepEqual(ids(r.main.concat(r.possible)).filter(id => id !== 'W1' && id !== 'W5'), [], q);
+  }
+  for (const enter of [false, true]) assert.deepEqual(ids(E.search('wwi', ix, { enter }).main), ['W5']);
+  assert.deepEqual(ids(E.search('wwii', ix).main), ['W1']);
+});
+test('a similar spelling of an author counts as an author word only beside another word of the same author (ER-03)', () => {
+  const ix = mini([{ id: 'A1', title: 'Maths Workbook Volume 2' }, { id: 'A2', title: 'Science Reader: Book 2' }, { id: 'A3', title: 'Warriors', author: 'Erin Hunter' },
+    { id: 'A4', title: 'Holes', author: 'Tim James' }, { id: 'A5', title: 'The Hunger Games', author: 'Suzanne Collins' }, { id: 'A6', title: '1984: A Study Guide' },
+    { id: 'A7', title: '1984', author: 'George Orwell' }]);
+  const r = E.search('hunger games book 2', ix);
+  assert.deepEqual([ids(r.main), ids(r.possible)], [['A5'], []]);
+  assert.ok(find(E.search('george orwel 1984', ix), 'A6').reasons.includes('author not listed'));   // "orwel" beside "george", one cell
+});
+test('given names spelled out must spell the initials: another title beside the surname is not a given name (ER-04)', () => {
+  const ix = mini([{ id: 'T1', title: 'Hobbit, The', author: 'J.R.R. Tolkien' }, { id: 'T2', title: 'Anne of Green Gables', author: 'L. M. Montgomery' },
+    { id: 'T3', title: 'Goosebumps: Say Cheese and Die!', author: 'R.L. Stine' }]);
+  for (const [q, id, surname] of [['roverandom tolkien', 'T1', 'Tolkien'], ['marigold montgomery', 'T2', 'Montgomery'], ['ransom stine', 'T3', 'Stine']]) {
+    const r = E.search(q, ix);
+    assert.deepEqual([ids(r.main), tierIn(r, id)], [[], 'possible'], q);
+    assert.ok(r.hints.some(h => h.code === 'authorHasOthers' && h.text.endsWith(`search '${surname}'`)), q);
+  }
+  for (const [q, id, why] of [['john ronald reuel tolkien', 'T1', 'john ronald reuel = J.R.R.'], ['john ronald tolkien', 'T1', 'john ronald = J.R.R.'],
+    ['lucy maud montgomery', 'T2', 'lucy maud = L. M.'], ['robert lawrence stine', 'T3', 'robert lawrence = R.L.']]) {
+    const h = find(E.search(q, ix), id);
+    assert.deepEqual([h.tier, h.reasons], ['close', [why]], q);
+  }
+});
+test('"A" after a letter\'s period is the article, not an initial: "Vitamin C. A Guide", "Smith, B. A tree…" (ER-05)', () => {
+  assert.deepEqual(words('Vitamin C. A Guide').map(x => x.w), ['vitamin', 'c', 'a', 'guide']);
+  assert.deepEqual(words('U.S.A Today, J.A Smith').map(x => x.w), ['usa', 'today', 'ja', 'smith']);
+  const ix = mini([{ id: 'C1', title: 'Vitamin C. A Guide for Parents' }, { id: 'C2', title: 'Malcolm X. A Life' }, { id: 'C3', title: 'Tree Grows in Brooklyn, A', author: 'Betty Smith' },
+    { id: 'C4', title: 'Plan B: A Novel', author: 'Jonathan Tropper' }]);
+  for (const [q, id] of [['vitamin c', 'C1'], ['malcolm x', 'C2'], ['Plan B. A Novel', 'C4']]) assert.equal(tierIn(E.search(q, ix), id), 'match', q);
+  const h = find(E.search('Smith, B. A tree grows in Brooklyn', ix), 'C3');
+  assert.deepEqual([h.tier, h.reasons], ['match', []]);
+});
+test('completions of the word being typed are explained, rank below literal prefixes and are not highlighted beside them (ER-06)', () => {
+  const ix = mini([{ id: 'P1', title: '60 Seconds To Shine Volume 2: 221 One-Minute Monologues For Women', author: 'John Capecci Et Al' },
+    { id: 'P2', title: 'The 7 Habits of Highly Effective Teens', author: 'Sean Covey' }, { id: 'P3', title: 'Harbor Stories Volume 2' }, { id: 'P4', title: 'Secret Garden' }]);
+  assert.deepEqual(find(E.search('60 seco', ix), 'P1').highlights.title, [[0, 2], [3, 7]]);   // "Seco" of Seconds, not the 2 of Volume 2
+  assert.deepEqual(find(E.search('the sec', ix), 'P1').highlights.title, [[3, 6]]);
+  const r = E.search('the sec', ix), M = ids(r.main);
+  assert.ok(M.indexOf('P3') > M.indexOf('P1') && M.indexOf('P3') > M.indexOf('P4'), M.join());
+  assert.deepEqual(find(r, 'P3').reasons, ['sec… = 2']);
+  assert.deepEqual(find(E.search('the sevent', ix), 'P2').reasons, ['sevent… = 7']);
+  assert.deepEqual(find(E.search('harbor stories nineteen eig', mini([{ id: 'P5', title: '1984 Harbor Stories' }])), 'P5').reasons, ['nineteen eig… = 1984']);
+});
+test('an ISBN with a digit too many is still an ISBN search with no hit (ER-07)', () => {
+  const ix = synth();
+  for (const q of ['97803064061571', 'ISBN 97803064061571', '978-0-306-40615-71', '978 0 306 40615 71']) for (const enter of [false, true]) {
+    const r = E.search(q, ix, { enter });
+    assert.deepEqual([r.state, r.isbnQuery, r.hints.map(h => h.code)], ['ok', true, ['isbnNoMatch']], q);
+  }
+});
+test('a probable author name that no cell has lets an authorless row be Possible: "george orwell 1984" (ER-08)', () => {
+  const ix = mini([{ id: 'D1', title: '1984: A DVD Study Guide', type: 'DVD' }, { id: 'D2', title: 'Holes' }, { id: 'D3', title: 'Fahrenheit 451', author: 'Ray Bradbury' },
+    { id: 'D4', title: 'Maths Workbook Volume 2' }]);
+  for (const q of ['george orwell 1984', '1984 george orwell', 'is george orwell 1984 banned']) {
+    assert.deepEqual(E.search(q, ix).possible.map(h => [rowId(h.row), h.reasons]), [['D1', ['author not listed']]], q);
+  }
+  assert.deepEqual(E.search('hunger games book 2', ix).possible, []);                   // a volume number alone never carries the guess
+});
+test('a lone year followed by a dash is the title word, not a year range being typed (ER-09)', () => {
+  const ix = mini([{ id: 'Y1', title: '1984', author: 'George Orwell' }, { id: 'Y2', title: '2001-2002 School Almanac' }, { id: 'Y3', title: 'Harbor Nights', author: 'Ada Mercer', year: '2023-2024' }]);
+  for (const [q, id] of [['1984-', 'Y1'], ['1984 -', 'Y1'], ['2001-', 'Y2'], ['2001-2', 'Y2'], ['2001-200', 'Y2']]) for (const enter of [false, true]) {
+    const r = E.search(q, ix, { enter });
+    assert.deepEqual([r.state, ids(r.main)], ['ok', [id]], q);
+  }
+  assert.equal(tierIn(E.search('mercer 2023-', ix), 'Y3'), 'match');                    // beside another word it is a range being typed
+  assert.equal(E.search('2008-2009', ix).state, 'stopwordsOnly');
+});
+test('ISBN cells: a 9-digit ISBN (lost leading 0) followed by text (ER-10)', () => {
+  const runs = v => E._internal.isbnRuns(v).map(x => x.d);
+  for (const v of ['306406152 (pbk)', 'ISBN 306406152 (pbk)', 'see 306406152 inside']) assert.deepEqual(runs(v), ['0306406152'], v);
+  assert.deepEqual(runs('306406152 9780306406157'), ['0306406152', '9780306406157']);
+  assert.deepEqual(ids(E.search('0306406152', mini([{ id: 'I1', title: 'Almanac', isbn: '306406152 (pbk)' }])).main), ['I1']);
+});
+test('no Roman numeral for a word that names a listed author: "xi jinping" (ER-11)', () => {
+  const ix = mini([{ id: 'X1', title: 'The Governance of Rivers', author: 'Xi Jinping' }, { id: 'X2', title: 'Quokka Math Practice, Grades 9–11' },
+    { id: 'X3', title: 'The 9/11 Commission Report' }, { id: 'X4', title: 'Frozen 2' }]);
+  const r = E.search('xi jinping', ix);
+  assert.deepEqual([ids(r.main), ids(r.possible)], [['X1'], []]);
+  assert.deepEqual(ids(E.search('xi', ix).main), ['X1']);
+  assert.equal(tierIn(E.search('frozen ii', ix), 'X4'), 'match');                         // elsewhere Roman numerals still read as digits
+});
+test('display title: ", A" before "/" and one letter is a letter pair, not an article (ER-12)', () => {
+  for (const t of ['Animals, A/Z', 'Whole World, A/V Edition', 'Vitamins, A/B/C', 'Animals, A - Z']) assert.equal(E.normalizeTitleForDisplay(t), t);
+  assert.equal(E.normalizeTitleForDisplay('Tale of Two Cities, A - 2'), 'A Tale of Two Cities - 2');
+  assert.equal(E.normalizeTitleForDisplay('Alchemist, The / Paulo Coelho'), 'The Alchemist / Paulo Coelho');
+});
+test('whole-series rows: a one-word series name typed as written lifts the row; descriptors are not part of the name (GEN-1)', () => {
+  const ix = mini([{ id: 'G1', title: 'Goosebumps series', author: 'R.L. Stine' }, { id: 'G2', title: 'Warriors series', author: 'Erin Hunter' },
+    { id: 'G3', title: 'Nancy Drew Mystery Stories - all titles', author: 'Carolyn Keene' }, { id: 'G4', title: 'Twilight Saga collection', author: 'Stephenie Meyer' },
+    { id: 'G5', title: 'New Moon', author: 'Stephenie Meyer' }, { id: 'G6', title: 'The Lovely Bones' }, { id: 'G7', title: 'Bone series' },
+    { id: 'G8', title: 'Chronicles of Narnia box set, The' }, { id: 'G9', title: 'Shine Series', author: 'Lauren Myracle' }, { id: 'G10', title: '60 Seconds to Shine' },
+    { id: 'G11', title: 'Goosebumps #1-10 Box Set' }]);
+  const SERIES = 'covers a whole series: its series name is in your search';
+  for (const [q, id] of [['goosebumps say cheese and die', 'G1'], ['warriors into the wild', 'G2'], ['nancy drew the secret of the old clock', 'G3'],
+    ['twilight new moon', 'G4'], ['narnia prince caspian', 'G8'], ['goosebumps book 12', 'G1']]) {
+    const r = E.search(q, ix), h = find(r, id);
+    assert.deepEqual([tierIn(r, id), h.reasons[0]], ['close', SERIES], q);
+  }
+  assert.equal(ids(E.search('nancy drew the secret of the old clock', ix).main)[0], 'G3');   // a two-word name pins the row first
+  assert.equal(tierIn(E.search('goosebumps book 12', ix), 'G11'), 'possible');            // another volume than the set's: not lifted
+  assert.deepEqual(ids(E.search('the lovely bones', ix).main), ['G6']);                   // "bones" reaches "Bone" only as a plural
+  assert.deepEqual(E.search('60 seconds to shine', ix).main.map(h => rowId(h.row) + ':' + h.tier), ['G10:match', 'G9:close']);
+});
+test('"#1-4" and "#1 - #3" are volume ranges: every volume, a "Covers" note, box sets flagged (GEN-2)', () => {
+  const pairs = q => words(q).pairs.flatMap(p => p.terms);
+  assert.deepEqual(pairs('#1-4'), ['#book1', '#book2', '#book3', '#book4']);
+  assert.deepEqual(pairs('#1 - #3'), ['#book1', '#book2', '#book3']);
+  assert.deepEqual(pairs('#1-#10').length, 10);
+  assert.deepEqual(pairs('#1, #2 and #3'), ['#book1', '#book2', '#book3']);
+  const ix = mini([{ id: 'H1', title: 'Baby-Sitters Club Graphic Novels #1-4' }, { id: 'H2', title: 'Diary of a Wimpy Kid #1-5 Box Set' },
+    { id: 'H3', title: 'Harry Potter #1-7', author: 'J.K. Rowling' }]);
+  for (const [q, id, note] of [['baby-sitters club #2', 'H1', 'Covers Books 1–4'], ['diary of a wimpy kid book 4', 'H2', 'Covers Books 1–5'],
+    ['harry potter book 4', 'H3', 'Covers Books 1–7']]) {
+    const r = E.search(q, ix), h = find(r, id);
+    assert.equal(tierIn(r, id), 'match', q);
+    assert.ok(h.notes.includes(note) && !h.notes.some(n => /only\.$/.test(n)), q);
+  }
+  assert.ok(find(E.search('wimpy kid box set', ix), 'H2').notes.includes('Covers a whole series'));
+  assert.deepEqual(find(E.search('baby-sitters club #2', ix), 'H1').reasons, ['#2 = #1-4']);
+});
+test('a format or question word beside the only required word, as a listed title has it, is a title word (GEN-3)', () => {
+  const ix = mini([{ id: 'F1', title: 'Illustrated Man, The', author: 'Ray Bradbury' }, { id: 'F2', title: 'Invisible Man', author: 'Ralph Ellison' },
+    { id: 'F3', title: 'The Old Man and the Sea' }, { id: 'F4', title: 'Ban This Book', author: 'Alan Gratz' }, { id: 'F5', title: 'This One Summer' },
+    { id: 'F6', title: 'The Banned Book Club' }, { id: 'F7', title: 'The Joy Luck Club' }, { id: 'F8', title: 'Guinness Book of World Records 2009' },
+    { id: 'F9', title: 'Guinness World Records 2015' }, { id: 'F10', title: '1984', author: 'George Orwell' }, { id: 'F11', title: '1984: A DVD Study Guide' }]);
+  for (const [q, id, others] of [['the illustrated man', 'F1', ['F2', 'F3']], ['ban this book', 'F4', ['F5']], ['is ban this book banned', 'F4', ['F5']],
+    ['the banned book club', 'F6', ['F7']]]) {
+    const r = E.search(q, ix);
+    assert.deepEqual(ids(r.main), [id], q);
+    for (const o of others) assert.ok(!ids(r.main).includes(o), `${q}: ${o}`);
+  }
+  assert.equal(tierIn(E.search('the illustrated man', ix), 'F2'), 'possible');
+  // the query's trailing descriptor and two or more required words keep format words optional
+  assert.deepEqual(ids(E.search('1984 paperback', ix).main), ['F10', 'F11']);
+  assert.deepEqual(ids(E.search('1984 dvd', ix).main).sort(), ['F10', 'F11']);
+  assert.ok(ids(E.search('guinness book of world records', ix).main).includes('F9'));
+});
+test('Possible rows anchored by a real word rank above rows that share only a small number (GEN-4)', () => {
+  const ix = mini([{ id: 'N1', title: 'Attack on Titan vol 2' }, { id: 'N2', title: 'Baby-Sitters Club #2' }, { id: 'N3', title: 'Death Note Volume 2' },
+    { id: 'N4', title: 'Hardy Boys #2' }, { id: 'N5', title: "Maus I: A Survivor's Tale", author: 'Art Spiegelman' }, { id: 'N6', title: 'Frozen II' }]);
+  for (const q of ['maus 2', 'maus ii', 'maus two', 'maus volume 2']) assert.equal(ids(E.search(q, ix).possible)[0], 'N5', q);
+});
+test('the reverse check needs the listed volume itself: a number word in the name is not the volume (GEN-5)', () => {
+  const ix = mini([{ id: 'V1', title: 'One-Punch Man Vol. 1' }, { id: 'V2', title: 'One-Punch Man Vol. 5' }, { id: 'V3', title: '39 Clues, The - Book 1', author: 'Rick Riordan' },
+    { id: 'V4', title: 'Seven Deadly Sins Vol. 7' }]);
+  for (const [q, id] of [['one punch man vol 4', 'V1'], ['The 39 Clues Book 2: One False Note', 'V3'], ['seven deadly sins volume 2', 'V4']]) {
+    const r = E.search(q, ix);
+    assert.deepEqual([tierIn(r, id), find(r, id).notes], ['possible', [`This listing names ${id === 'V3' ? 'Book' : 'Volume'} ${id === 'V4' ? 7 : 1} only.`]], q);
+  }
+  assert.equal(tierIn(E.search('one punch man vol 1', ix), 'V1'), 'match');
+  assert.equal(tierIn(E.search('one punch man 1 viz media edition', ix), 'V1'), 'close');   // the volume typed as digits in a longer query
 });
