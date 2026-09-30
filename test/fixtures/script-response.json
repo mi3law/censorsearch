@@ -1,0 +1,173 @@
+{
+  "format": "censorsearch-v1",
+  "spreadsheetId": "synthetic-test-sheet-id-00000000000000000000",
+  "fetchedAt": "2026-01-02T03:04:05.000Z",
+  "tabs": [
+    {
+      "name": "Sheet1",
+      "gid": "0",
+      "hiddenTab": false,
+      "headerRow": 3,
+      "above": [
+        [
+          "Test list"
+        ],
+        [
+          "updated as of 1 January 2026"
+        ]
+      ],
+      "headers": [
+        "Title",
+        "Author",
+        "ISBN",
+        "Banned By",
+        "Type",
+        "Year of Banning",
+        "Memo"
+      ],
+      "columns": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "E",
+        "F",
+        "G"
+      ],
+      "lastColumn": "H",
+      "rows": [
+        {
+          "row": 4,
+          "values": [
+            "101 Creepy Jokes",
+            "Jovial Bob Stine",
+            "",
+            "RS",
+            "Book",
+            "2010-2011",
+            ""
+          ],
+          "raw": {},
+          "links": {
+            "0": "https://example.org/books/creepy-jokes"
+          },
+          "hidden": false
+        },
+        {
+          "row": 5,
+          "values": [
+            "1984",
+            "George Orwell",
+            "9.79889E+12",
+            "Ministry",
+            "Book",
+            "2024-2025",
+            "Memo 751459"
+          ],
+          "raw": {
+            "2": "9798891808546"
+          },
+          "links": {
+            "6": "https://drive.google.com/file/d/synthetic-memo-1/view"
+          },
+          "hidden": false
+        },
+        {
+          "row": 6,
+          "values": [
+            "Alchemist, The",
+            "Paulo Coelho",
+            "817450835X",
+            "UAS",
+            "Book",
+            "2023",
+            "See memo"
+          ],
+          "raw": {
+            "2": "817450835X"
+          },
+          "links": {
+            "6": "https://drive.google.com/file/d/synthetic-memo-2/view"
+          },
+          "hidden": false
+        },
+        {
+          "row": 7,
+          "values": [
+            "Bad Link Book",
+            "Anon Writer",
+            "",
+            "KES",
+            "Book",
+            "2022",
+            "Click me"
+          ],
+          "raw": {},
+          "links": {},
+          "hidden": false
+        },
+        {
+          "row": 8,
+          "values": [
+            "Merged One",
+            "Author A",
+            "",
+            "Ministry",
+            "DVD",
+            "2021",
+            ""
+          ],
+          "raw": {},
+          "links": {},
+          "hidden": false
+        },
+        {
+          "row": 9,
+          "values": [
+            "Merged Two",
+            "Author B",
+            "",
+            "Ministry",
+            "CD",
+            "2021",
+            ""
+          ],
+          "raw": {},
+          "links": {},
+          "hidden": false
+        },
+        {
+          "row": 10,
+          "values": [
+            "Hidden By Filter",
+            "Author C",
+            "",
+            "RS",
+            "Book",
+            "2020",
+            ""
+          ],
+          "raw": {},
+          "links": {},
+          "hidden": true
+        },
+        {
+          "row": 11,
+          "values": [
+            "Hidden By User",
+            "Author D",
+            "",
+            "UAS",
+            "Book",
+            "2020",
+            ""
+          ],
+          "raw": {},
+          "links": {},
+          "hidden": true
+        }
+      ]
+    }
+  ],
+  "errors": []
+}
