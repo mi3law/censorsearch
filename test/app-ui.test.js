@@ -709,3 +709,185 @@ test('"moved" notes go on the cards on screen when the new data lands (APPSHEET-
   await p.type('orchard');
   assert.equal(p.cards()[0].querySelector('.moved'), null, 'not on screen when the data changed');
 });
+
+// ------------------------------------------------------------------------------------------------
+// Review round 2
+
+test('an unknown ?script= gets no memo or title-cell links either; the memo text still shows (WEB2-1, BR2-1)', async () => {
+  const withLinks = scriptBody(SID, {});
+  const json = JSON.parse(withLinks);
+  json.tabs[0].rows[0].values[6] = 'Ministry memo 751459';
+  json.tabs[0].rows[0].links = { 0: 'https://accounts-google.example/signin', 6: 'https://accounts-google.example/memo' };
+  const body = JSON.stringify(json);
+  const href = 'https://school.example/censorsearch/?script=' + encodeURIComponent(OTHER_SCRIPT);
+  const p = await loaded({ href, fetch: stubFetch(() => jsonResponse(body)) });
+  assert.match(p.$('override-note').textContent, /its rows get no links/);
+  await p.type('zebra tales');
+  const c = p.cards()[0];
+  assert.deepEqual(c.querySelectorAll('a').map(a => a.href), [], 'no link of any kind from the unknown script');
+  assert.match(c.querySelector('.memo').textContent, /^Memo: Ministry memo 751459$/);
+
+  // The page's own script keeps them
+  const own = await loaded({ config: { scriptUrl: SCRIPT_URL }, fetch: stubFetch(() => jsonResponse(body)) });
+  await own.type('zebra tales');
+  const hrefs = own.cards()[0].querySelectorAll('a').map(a => a.href);
+  assert.ok(hrefs.includes('https://accounts-google.example/memo') && hrefs.includes('https://accounts-google.example/signin'), hrefs.join(' '));
+});
+
+test('a complete query ending in a 1–2 letter word gets the no-results box; a lone short word still says "Keep typing…" (WEB2-2)', async () => {
+  const p = await loaded();
+  for (const q of ['it ends with us', 'the wizard of oz']) {
+    await p.type(q);
+    assert.equal(p.text('summary'), 'No listing found.', q);
+    const box = p.$('results').querySelector('.no-results');
+    assert.ok(box, q);
+    assert.match(box.textContent, /No listing found\. This does not mean the item is permitted\./);
+    assert.match(box.textContent, /the author's surname alone/);
+  }
+  await p.type('oz');
+  assert.equal(p.text('summary'), 'Keep typing…');
+  assert.equal(p.$('results').querySelector('.no-results'), null);
+});
+
+test('a refresh that reads every tab again is kept: a first tab whose id became known, a script that dropped a tab (WEB2-3)', async () => {
+  // ?sheet= without a gid: the gid 0 check fails on the first load, then works; the sheet gains a row above Zebra Tales
+  const first = /\/export\?format=csv$/;
+  let probeFails = true, csv = sheetCsv();
+  const f = stubFetch(url => {
+    if (/gid=0$/.test(url)) return probeFails ? new Response('', { status: 429 }) : csvResponse(csv, 'Sheet1');
+    if (first.test(url)) return csvResponse(csv, 'Sheet1');
+    return new Response('', { status: 400 });
+  });
+  const p = await loaded({ href: sheetHref(SID2), fetch: f });
+  await p.type('zebra tales');
+  assert.equal(p.cards()[0].querySelector('a.row-link').href, 'https://docs.google.com/spreadsheets/d/' + SID2 + '/edit');
+  probeFails = false;
+  csv = sheetCsv(['Aardvark,New,,KES,Book,2021,'].concat(BASE_ROWS));
+  await p.advance(6 * MINUTE);
+  assert.match(p.text('status'), /^7 items/);
+  assert.equal(p.text('status-warning'), '');
+  let card = p.cards()[0];
+  assert.match(card.textContent, /Sheet1 · row 7/);
+  assert.equal(card.querySelector('.moved').textContent, 'moved from row 6 to 7', 'the same row, now with its tab id');
+  assert.equal(card.querySelector('a.row-link').href, rowLink(SID2, 7));
+  // The tab's id is kept from then on: later refreshes read gid 0 directly, so the row links keep their row
+  const before = f.calls.length;
+  csv = sheetCsv(['Aardvark,New,,KES,Book,2021,', 'Aardwolf,New,,KES,Book,2021,'].concat(BASE_ROWS));
+  await p.advance(6 * MINUTE);
+  assert.ok(f.calls.length > before);
+  assert.ok(f.calls.slice(before).every(c => !first.test(c.url)), f.calls.slice(before).map(c => c.url).join(' '));
+  card = p.cards()[0];
+  assert.equal(card.querySelector('a.row-link').href, rowLink(SID2, 8));
+
+  // Script path: the maintainer drops Other Materials from the script and adds a row to Sheet1
+  const tab = (name, gid, rows) => ({ name, gid, headerRow: 3, above: [['L'], ['updated as of 1 January 2026']], headers: HEADERS, rows });
+  let mode = 'both';
+  const body = () => JSON.stringify({
+    format: 'censorsearch-v1', spreadsheetId: SID,
+    tabs: [tab('Sheet1', '0', [{ row: 4, values: ['Zebra Tales', 'Zed', '', 'Ministry', 'Book', '2020', ''] }]
+      .concat(mode === 'both' ? [] : [{ row: 5, values: ['Newly Banned Title', 'X', '', 'Ministry', 'Book', '2026', ''] }]))]
+      .concat(mode === 'both' ? [tab('Other Materials', '111', [{ row: 4, values: ['Amplify Unit', '', '', 'Ministry', 'Book', '2020', ''] }])] : []),
+    errors: mode === 'error' ? [{ tab: 'Other Materials', message: 'Tab not readable.' }] : [],
+  });
+  const s = await loaded({ config: { scriptUrl: SCRIPT_URL }, fetch: stubFetch(() => jsonResponse(body())) });
+  assert.match(s.text('status'), /^2 items \(Sheet1 1, Other Materials 1\)/);
+  mode = 'error';                       // the script says it couldn't read the tab: keep the full list
+  await s.advance(6 * MINUTE);
+  assert.match(s.text('status'), /^2 items \(Sheet1 1, Other Materials 1\)/);
+  assert.match(s.text('status-warning'), /^Couldn't refresh since \d\d:\d\d; showing data fetched at \d\d:\d\d\.$/);
+  mode = 'dropped';                     // the script no longer returns the tab, and says nothing is wrong
+  await s.advance(MINUTE);
+  assert.match(s.text('status'), /^2 items · updated as of 1 January 2026/);
+  assert.equal(s.text('status-warning'), '');
+  await s.type('newly banned title');
+  assert.equal(s.text('summary'), '1 listing found');
+});
+
+test('background checks keep keyboard focus on Retry and do not rewrite unchanged status text (WEB2-5)', async () => {
+  // partial list: the silent refresh every 5 minutes rebuilds the status
+  const f = stubFetch(url => (/gid=123/.test(url) ? new Response('oops', { status: 500 }) : sheetCsv()));
+  const p = await loaded({ config: { tabs: [{ gid: '0', name: 'Sheet1' }, { gid: '123', name: 'Other Materials' }] }, fetch: f });
+  p.$('status-actions').querySelector('button').focus();
+  await p.advance(6 * MINUTE);
+  assert.equal(p.focused().tagName, 'BUTTON');
+  assert.equal(p.focused().textContent, 'Retry');
+  assert.ok(p.focused().isConnected);
+
+  // refreshes failing every minute: same words, same text node, focus stays
+  const q = await loaded();
+  q.setCsv(new TypeError('Failed to fetch'));
+  await q.advance(6 * MINUTE);
+  const warning = q.text('status-warning');
+  assert.match(warning, /^Couldn't refresh since \d\d:\d\d; showing data fetched at \d\d:\d\d\.$/);
+  const node = q.$('status-warning').childNodes[0], statusNode = q.$('status').childNodes[0];
+  q.$('status-actions').querySelector('button').focus();
+  await q.advance(3 * MINUTE);
+  assert.equal(q.text('status-warning'), warning);
+  assert.equal(q.$('status-warning').childNodes[0], node, 'the live region is not rewritten');
+  assert.equal(q.$('status').childNodes[0], statusNode);
+  assert.equal(q.focused().textContent, 'Retry');
+  assert.ok(q.focused().isConnected);
+  // once a refresh works, the Retry button goes and focus moves to the status line
+  q.setCsv(sheetCsv());
+  await q.advance(MINUTE);
+  assert.equal(q.text('status-warning'), '');
+  assert.equal(q.focused(), q.$('status'));
+});
+
+test('over plain http (no crypto.subtle) the maintainer note explains how to trust the script (WEB2-6)', async () => {
+  const digest = require('crypto').createHash('sha256').update(SCRIPT_URL).digest('hex');
+  const href = 'http://intranet.school.example/censorsearch/?script=' + encodeURIComponent(SCRIPT_URL);
+  const open = async config => {
+    const p = makePage({ href, config, fetch: stubFetch(() => jsonResponse(scriptBody(SID))) });
+    p.win.crypto = { getRandomValues() {} };
+    p.start();
+    await p.flush();
+    return p;
+  };
+  let p = await open({ trustedScripts: [digest] });
+  assert.equal(p.$('override-note').hidden, false);
+  const notes = p.text('maintainer-list');
+  assert.match(notes, /needs the page to be served over https/);
+  assert.ok(notes.includes('add its full address (' + SCRIPT_URL + ') to trustedScripts'), notes);
+  assert.match(p.text('maintainer-summary'), /\(2\)$/);
+  // the full address works without crypto.subtle
+  p = await open({ trustedScripts: [SCRIPT_URL] });
+  assert.equal(p.$('override-note').hidden, true);
+  await p.type('zebra tales');
+  assert.ok(p.$('results').querySelector('a.row-link'));
+});
+
+test('multi-line summary counts a full match hidden by the filter, and totals the hidden listings (BR2-2)', async () => {
+  const p = await loaded();
+  p.change(p.codeInput('RS'), false);
+  await p.type('creepy riddles\nxyzzy plugh\nriddles');
+  assert.equal(p.text('summary'),
+    '3 lines: 1 with matches, 1 with matches hidden by the Banned By filter, 1 without · 2 listings hidden by the Banned By filter');
+  const line1 = p.$('results').querySelectorAll('section.line')[0].textContent;
+  assert.match(line1, /1 possible match/);
+  assert.match(line1, /1 more listing hidden by the Banned By filter/);
+  p.change(p.codeInput('RS'), true);
+  assert.equal(p.text('summary'), '3 lines: 2 with matches, 1 without');
+});
+
+test('focus on a "Show all N" button survives a refresh that changes N (BR2-3)', async () => {
+  const dragons = Array.from({ length: 60 }, (_, i) => 'Dragon Tale ' + (i + 1) + ',Dee Writer,,Ministry,Book,2020,');
+  const p = await loaded({ csv: sheetCsv(dragons) });
+  await p.type('dragon tale');
+  p.$('results').querySelectorAll('button').find(b => b.textContent === 'Show all 60 listings').focus();
+  p.setCsv(sheetCsv(dragons.concat(['Dragon Tale 61,Dee Writer,,Ministry,Book,2020,'])));
+  await p.advance(6 * MINUTE);
+  assert.equal(p.focused().tagName, 'BUTTON');
+  assert.equal(p.focused().textContent, 'Show all 61 listings');
+  assert.ok(p.focused().isConnected);
+});
+
+test('a partial-load warning quoting a script message ends with one full stop (BR2-4)', async () => {
+  const body = scriptBody(SID, { errors: [{ tab: 'Other Materials', message: 'Tab not found.' }] });
+  const href = 'https://school.example/censorsearch/?script=' + encodeURIComponent(OTHER_SCRIPT);
+  const p = await loaded({ href, fetch: stubFetch(() => jsonResponse(body)) });
+  assert.equal(p.text('status-warning'), "Loaded Sheet1; couldn't load Other Materials: The script says: “Tab not found.”");
+  const q = await loaded({ config: { tabs: [{ gid: '0', name: 'Sheet1' }, { gid: '123', name: 'Other Materials' }] },
+    fetch: stubFetch(url => (/gid=123/.test(url) ? new Response('oops', { status: 500 }) : sheetCsv())) });
+  assert.equal(q.text('status-warning'), "Loaded Sheet1; couldn't load Other Materials: Google answered with an error (HTTP 500): try again in a moment.");
+});

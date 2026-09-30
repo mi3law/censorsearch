@@ -574,6 +574,21 @@ test('load (CSV): a link without a gid reads the first tab, and uses gid 0 only 
   assert.deepEqual(res.errors.map(e => [e.tab, e.kind]), [['the first tab', 'network']]);
 });
 
+test('load (CSV): gid 0 is the first tab only when the whole export file name matches, not just the part after " - " (WEB2-4)', async () => {
+  const first = /\/export\?format=csv$/;
+  const named = (body, file) => new Response(body, { status: 200, headers: { 'content-type': 'text/csv', 'content-disposition': "attachment; filename*=UTF-8''" + encodeURIComponent(file) + '.csv' } });
+  // "Ministry - 2024" is the first tab; gid 0 is another tab, "School - 2024": both end in "2024"
+  let fetch = async url => (first.test(url) ? named(SYN, 'Banned List - Ministry - 2024') : named(OTHER, 'Banned List - School - 2024'));
+  let res = await S.load({ kind: 'csv', sheetId: SID, tabs: [{ gid: null, name: null }] }, { fetch });
+  assert.deepEqual(res.tabs.map(t => t.gid), ['']);
+  assert.equal(res.rows.length, 7, 'the first tab is the one read');
+  assert.equal(S.rowUrl(res.rows[0].sheetId, res.rows[0].gid, res.rows[0].row), 'https://docs.google.com/spreadsheets/d/' + SID + '/edit');
+  // the same whole name is the same tab
+  fetch = async () => named(SYN, 'Banned List - Ministry - 2024');
+  res = await S.load({ kind: 'csv', sheetId: SID, tabs: [{ gid: null, name: null }] }, { fetch });
+  assert.deepEqual(res.tabs.map(t => t.gid), ['0']);
+});
+
 test('load (script): success, configured names, {error}, bad URL, HTML page', async () => {
   const json = scriptJson();
   let seen = null;

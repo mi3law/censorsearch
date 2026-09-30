@@ -131,8 +131,8 @@
   }
 
   // Google: attachment; filename="Doc-Tab.csv"; filename*=UTF-8''Doc%20title%20-%20Tab%20name.csv
-  // The tab name is the part after the LAST " - ". (A tab whose own name contains " - " is cut; configure its name.)
-  function tabNameFromDisposition(headerValue) {
+  // The whole file name, decoded (filename* when it can be decoded, else filename), or null.
+  function fileNameFromDisposition(headerValue) {
     const h = str(headerValue);
     if (!h) return null;
     let name = null;
@@ -147,8 +147,16 @@
       const plain = h.match(/filename\s*=\s*(?:"((?:[^"\\]|\\.)*)"|([^;]*))/i);
       if (plain) name = (plain[1] != null ? plain[1].replace(/\\(.)/g, '$1') : plain[2]).trim();
     }
-    if (!name) return null;
-    name = name.replace(/\.csv$/i, '');
+    return name ? { name, fromStar } : null;
+  }
+
+  // The tab name is the part after the LAST " - ". (A tab whose own name contains " - " is cut; configure its name.)
+  // For display only: two tabs can share that part ("Ministry - 2024", "School - 2024"), so never use it to tell tabs apart.
+  function tabNameFromDisposition(headerValue) {
+    const file = fileNameFromDisposition(headerValue);
+    if (!file) return null;
+    const fromStar = file.fromStar;
+    let name = file.name.replace(/\.csv$/i, '');
     const i = name.lastIndexOf(' - ');
     if (i >= 0) name = name.slice(i + 3);
     else if (!fromStar) return null;          // the ASCII filename= drops spaces ("Doc-OtherMaterials"): not trustworthy
@@ -536,14 +544,18 @@
 
   const dispositionOf = res => (res && res.headers && res.headers.get ? res.headers.get('content-disposition') : null);
 
-  // The name of the tab Google exports for gid (headers only; the body is dropped), or null.
-  async function exportedTabName(fetchFn, sheetId, gid, timeoutMs) {
+  // The whole file name of the export ("Doc title - Tab name.csv"): the document title is the same for every tab and
+  // tab names are unique in a spreadsheet, so two exports with the same file name are the same tab.
+  const exportFileName = res => { const f = fileNameFromDisposition(dispositionOf(res)); return f ? f.name : null; };
+
+  // The file name of the export Google sends for gid (headers only; the body is dropped), or null.
+  async function exportedFileName(fetchFn, sheetId, gid, timeoutMs) {
     const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     const timer = ctrl && timeoutMs > 0 ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
     try {
       const res = await fetchFn(csvUrl(sheetId, gid), Object.assign({}, FETCH_OPTS, ctrl ? { signal: ctrl.signal } : {}));
       try { if (res && res.body && typeof res.body.cancel === 'function') res.body.cancel().catch(() => {}); } catch (e) { /* ignore */ }
-      return res && res.ok ? tabNameFromDisposition(dispositionOf(res)) : null;
+      return res && res.ok ? exportFileName(res) : null;
     } catch (e) {
       return null;
     } finally {
@@ -562,12 +574,14 @@
       let gid = gidOrFirst(t && t.gid);
       const configured = t && t.name ? str(t.name) : null;
       // No gid: read the first tab (the export without a gid). Its id isn't in the reply, so ask for gid 0 alongside:
-      // when Google names the same tab, row links can use gid 0; otherwise they open the sheet without a row.
-      const gid0Name = gid ? null : exportedTabName(fetchFn, sheetId, '0', timeoutMs);
+      // when Google gives the same file name (so the same tab), row links can use gid 0; otherwise they open the sheet
+      // without a row.
+      const gid0File = gid ? null : exportedFileName(fetchFn, sheetId, '0', timeoutMs);
       try {
         const { res, body } = await fetchText(fetchFn, csvUrl(sheetId, gid), timeoutMs, msgs);
         const named = tabNameFromDisposition(dispositionOf(res));
-        if (!gid && named && named === await gid0Name) gid = '0';
+        const file = exportFileName(res);
+        if (!gid && named && file && file === await gid0File) gid = '0';
         const tab = configured || named || 'Sheet';
         try {
           return { part: extractRows(tableFromCsv(parseCsv(body), { tab, gid, sheetId }), { schoolCode }) };

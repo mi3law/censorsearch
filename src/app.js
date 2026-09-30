@@ -279,22 +279,26 @@
     const fetchedAt = result && result.fetchedAt instanceof Date && !isNaN(result.fetchedAt) ? result.fetchedAt : new Date();
     let sheetId = (result && result.sheetId) || state.source.sheetId || null;
     if (state.untrusted) {
-      // A script this page doesn't know can claim any spreadsheet id: never turn that claim into a link, and quote its words.
+      // A script this page doesn't know can claim any spreadsheet id and any link: never turn its claims into links
+      // (sheet, row, memo or title cell; the memo text still shows), and quote its words.
       sheetId = null;
-      for (const r of rows) r.sheetId = '';
+      for (const r of rows) { r.sheetId = ''; r.memoUrl = null; r.titleUrl = null; }
       errors = errors.map(e => (e.kind === 'script' ? Object.assign({}, e, { message: 'The script says: “' + sentence(e.message) + '”' }) : e));
     }
 
     if (background) {
-      // Keep the old data unless every tab it had loaded again.
+      // Keep the old data when a tab it had failed to load again. When every tab the source names answered, the new
+      // data is what a fresh page load would show (a script that stopped returning a tab, a first tab whose id is now
+      // known), so it replaces the old.
       const had = state.data.tabs.map(t => str(t.gid));
       const got = new Set(tabs.map(t => str(t.gid)));
-      if (!rows.length || !had.every(g => got.has(g))) {
-        state.refreshError = { at: new Date() };
+      if (!rows.length || (errors.length && !had.every(g => got.has(g)))) {
+        state.refreshError = state.refreshError || { at: new Date() };
         renderStatus();
         return false;
       }
     }
+    pinFirstTab(tabs);
     if (!rows.length) {
       state.data = null; state.index = null; state.shown = []; state.linkRows = [];
       state.phase = 'failed';
@@ -319,7 +323,7 @@
       index = Engine.buildIndex(rows, state.aliases ? { aliases: state.aliases } : {});
     } catch (e) {
       console.error(e);
-      if (background) { state.refreshError = { at: new Date() }; renderStatus(); return false; }
+      if (background) { state.refreshError = state.refreshError || { at: new Date() }; renderStatus(); return false; }
       state.data = null; state.index = null; state.phase = 'failed';
       state.failure = { errors: [{ tab: null, message: "Couldn't prepare the search: " + (e && e.message ? e.message : e), kind: 'index' }], sheetId };
       renderStatus(); renderResults();
@@ -328,7 +332,10 @@
 
     // The rows on screen now (not when the fetch started) get the "moved" notes; the pairing also serves the click re-check.
     const focus = focusKey();
-    state.rowPairs = pairRows(state.data ? state.data.rows : [], rows);
+    // Rows read before the first tab's id was known (gid '') are the same tab as the one tab read now.
+    const oldTabs = state.data ? state.data.tabs : [];
+    const firstGid = oldTabs.length === 1 && str(oldTabs[0].gid) === '' && tabs.length === 1 ? str(tabs[0].gid) : null;
+    state.rowPairs = pairRows(state.data ? state.data.rows : [], rows, firstGid);
     state.moves = new Map();
     for (const old of state.shown) {
       const now = state.rowPairs.get(old);
@@ -350,19 +357,20 @@
 
   // Pairs each old row with the same row in the new data: same tab and fingerprint, and rows sharing a fingerprint
   // pair up in order (the k-th old one with the k-th new one), so two identical listings never claim the same new row.
-  // When a copy was added or removed, each old row takes the nearest new row not already taken.
-  function pairRows(oldRows, newRows) {
-    const group = rows => {
+  // When a copy was added or removed, each old row takes the nearest new row not already taken. firstGid, when given, is
+  // the id now known for the old rows' gid ''.
+  function pairRows(oldRows, newRows, firstGid) {
+    const group = (rows, gidOf) => {
       const m = new Map();
       for (const r of rows) {
-        const k = str(r.gid) + '\u0000' + fpOf(r);
+        const k = gidOf(r) + '\u0000' + fpOf(r);
         if (!m.has(k)) m.set(k, []);
         m.get(k).push(r);
       }
       return m;
     };
-    const next = group(newRows), pairs = new Map();
-    for (const [k, olds] of group(oldRows)) {
+    const next = group(newRows, r => str(r.gid)), pairs = new Map();
+    for (const [k, olds] of group(oldRows, r => (firstGid != null && str(r.gid) === '' ? firstGid : str(r.gid)))) {
       const free = (next.get(k) || []).slice();
       if (!free.length) continue;
       if (free.length === olds.length) { olds.forEach((r, i) => pairs.set(r, free[i])); continue; }
@@ -376,12 +384,21 @@
     return pairs;
   }
 
+  // A link without a gid reads the sheet's first tab. Once a load has confirmed that tab's id, keep reading it by that
+  // id, so a later failed check of the id can't take the rows out of the row links (and the check isn't repeated).
+  function pinFirstTab(tabs) {
+    const s = state.source;
+    if (!s || s.kind !== 'csv' || arr(s.tabs).length !== 1 || s.tabs[0].gid || tabs.length !== 1 || !str(tabs[0].gid)) return;
+    state.source = Object.assign({}, s, { tabs: [{ gid: str(tabs[0].gid), name: s.tabs[0].name }] });
+  }
+
   function moveOf(row) {
     return state.moves.get(row) || null;
   }
 
   // Keyboard focus across a refresh that rebuilds the results: remember the focused card (or its row link), results
-  // button or filter checkbox, and put focus back on the same one afterwards if the rebuild dropped it.
+  // button or filter checkbox, and put focus back on the same one afterwards if the rebuild dropped it. Results buttons
+  // are found again by their data-key (a "Show all N" count can change), else by their text.
   function focusKey() {
     const a = document.activeElement;
     if (!a || a === document.body) return null;
@@ -392,7 +409,7 @@
       const same = state.cardEls.filter(x => x.row === c.row);
       return { kind: 'card', row: c.row, index: same.indexOf(c), link: a !== c.el && a.matches('a.row-link') };
     }
-    return a.tagName === 'BUTTON' ? { kind: 'button', text: a.textContent } : null;
+    return a.tagName === 'BUTTON' ? { kind: 'button', key: a.getAttribute('data-key'), text: a.textContent } : null;
   }
 
   function restoreFocus(key) {
@@ -404,7 +421,10 @@
       const same = state.cardEls.filter(x => x.row === row);
       const c = same[key.index] || same[0];
       if (c) target = (key.link && c.el.querySelector('a.row-link')) || c.el;
-    } else target = Array.from(ui.results.querySelectorAll('button')).find(b => b.textContent === key.text) || null;
+    } else {
+      const buttons = Array.from(ui.results.querySelectorAll('button'));
+      target = (key.key && buttons.find(b => b.getAttribute('data-key') === key.key)) || buttons.find(b => b.textContent === key.text) || null;
+    }
     if (target) target.focus();
   }
 
@@ -466,40 +486,51 @@
     return "Can't load the list. " + errors.map(e => (e.tab ? e.tab + ': ' : '') + sentence(e.message)).join(' ');
   }
 
+  // Re-rendering replaces the status actions. Keyboard focus on one of them moves to its replacement, or to the status
+  // line once there is none (while a Retry is loading, its click handler places focus when the load ends). The live
+  // status lines are rewritten only when their words change, so a screen reader doesn't hear them again on every check.
   function renderStatus() {
-    ui.warning.textContent = '';
-    ui.actions.replaceChildren();
-    ui.actions.hidden = true;
-    const showActions = (...nodes) => { ui.actions.append(...nodes.filter(Boolean)); ui.actions.hidden = false; };
+    const a = document.activeElement;
+    const focused = a && a !== ui.actions && within(a, ui.actions) ? a.textContent : null;
+    const view = statusView();
+    setText(ui.status, view.status);
+    setText(ui.warning, view.warning || '');
+    const actions = arr(view.actions).filter(Boolean);
+    ui.actions.replaceChildren(...actions);
+    ui.actions.hidden = !actions.length;
+    if (focused == null || !isFocusLost()) return;
+    const again = ui.actions.hidden ? [] : Array.from(ui.actions.querySelectorAll('button, a'));
+    const target = again.find(x => x.textContent === focused) || again[0] || (state.phase === 'loading' ? null : ui.status);
+    if (target) target.focus();
+  }
 
+  const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+
+  function statusView() {
     if (state.phase === 'config') {
-      ui.status.textContent = state.configError;
-      if (state.overridden) showActions(defaultPageLink('Use the default list'));
-      return;
+      return { status: state.configError, actions: [state.overridden ? defaultPageLink('Use the default list') : null] };
     }
-    if (state.phase === 'loading') { ui.status.textContent = TEXT.loading; return; }
+    if (state.phase === 'loading') return { status: TEXT.loading };
     if (state.phase === 'failed') {
       const f = state.failure || { errors: [] };
-      ui.status.textContent = failureText(arr(f.errors));
       const url = sheetLinkUrl();
-      showActions(retryButton(), url ? ' ' : null, url ? extLink(url, 'Open the sheet') : null,
-        state.overridden ? ' · ' : null, state.overridden ? defaultPageLink('Use the default list') : null);
-      return;
+      return {
+        status: failureText(arr(f.errors)),
+        actions: [retryButton(), url ? ' ' : null, url ? extLink(url, 'Open the sheet') : null,
+          state.overridden ? ' · ' : null, state.overridden ? defaultPageLink('Use the default list') : null],
+      };
     }
-    ui.status.textContent = loadedText();
     const warn = [];
     const d = state.data;
     if (d.errors.length) {
       const loaded = d.tabs.map(t => t.tab);
-      warn.push('Loaded ' + listText(loaded) + "; couldn't load " +
-        d.errors.map(e => (e.tab || 'a tab') + ': ' + stripStop(e.message)).join('; ') + '.');
+      // sentence(): a message that ends in a quoted sentence (“Tab not found.”) gets no second full stop
+      warn.push(sentence('Loaded ' + listText(loaded) + "; couldn't load " +
+        d.errors.map(e => (e.tab || 'a tab') + ': ' + stripStop(e.message)).join('; ')));
     }
     if (state.manualRetry) warn.push('Checking the sheet again…');
-    else if (state.refreshError) warn.push("Couldn't refresh at " + hhmm(state.refreshError.at) + '; showing data fetched at ' + hhmm(d.fetchedAt) + '.');
-    if (warn.length) {
-      ui.warning.textContent = warn.join(' ');
-      showActions(retryButton());
-    }
+    else if (state.refreshError) warn.push("Couldn't refresh since " + hhmm(state.refreshError.at) + '; showing data fetched at ' + hhmm(d.fetchedAt) + '.');
+    return { status: loadedText(), warning: warn.join(' '), actions: warn.length ? [retryButton()] : [] };
   }
 
   function renderSource() {
@@ -563,9 +594,13 @@
     }
     ui.notesList.append(el('li', null, TEXT.filterNote));
     let n = issues.length + 1;
-    if (state.untrusted && state.scriptDigest) {
-      ui.notesList.append(el('li', null, "This page's address names an Apps Script web app that config.js doesn't list, so the page marks it as not its usual list and shows no sheet or row links. If it is the school's own script, add \"" +
-        state.scriptDigest + '" to trustedScripts in config.js (this code stands for the script\'s address without revealing it).'));
+    if (state.untrusted) {
+      const why = "This page's address names an Apps Script web app that config.js doesn't list, so the page marks it as not its usual list and shows no sheet or row links. ";
+      // Without crypto.subtle (a page served over plain http) the code can't be worked out; the full address still works.
+      ui.notesList.append(el('li', null, why + (state.scriptDigest
+        ? "If it is the school's own script, add \"" + state.scriptDigest + '" to trustedScripts in config.js (this code stands for the script\'s address without revealing it).'
+        : "This browser couldn't work out the code for trustedScripts: that needs the page to be served over https. Serve it over https and this note gives the code; or, if it is the school's own script, add its full address (" +
+          str(state.source && state.source.url) + ') to trustedScripts in config.js.')));
       n++;
     }
     ui.notesSummary.textContent = "Notes for the list's maintainers (" + n + ')';
@@ -656,6 +691,8 @@
     }
   }
 
+  const wordCount = s => (str(s).match(/[\p{L}\p{N}]+/gu) || []).length;
+
   function runSearch(enter) {
     clearTimeout(state.debounce);
     state.enter = !!enter;
@@ -721,12 +758,12 @@
     else renderSingle(run.result, out, run.value);
   }
 
-  function hiddenNote(count, shownCount) {
+  function hiddenNote(count, shownCount, key) {
     const p = el('p', { class: 'hidden-by-filter' });
     p.append(shownCount
       ? plural(count, 'more listing', 'more listings') + ' hidden by the Banned By filter.'
       : plural(count, 'listing', 'listings') + ' hidden by the Banned By filter.');
-    const b = el('button', { type: 'button' }, 'Show them');
+    const b = el('button', { type: 'button', 'data-key': 'reveal:' + key }, 'Show them');
     b.addEventListener('click', () => {
       setAllCodes(true);
       const first = ui.results.querySelector('.card');
@@ -790,8 +827,9 @@
     const main = splitHidden(res.main), possible = splitHidden(res.possible), prefix = splitHidden(res.isbnPrefix);
     const shown = main.shown.length + possible.shown.length + prefix.shown.length;
     const hidden = main.hidden + possible.hidden + prefix.hidden;
-    if (!shown && !hidden && res.state === 'ok' && res.hints.some(h => h.code === 'keepTyping')) {
-      // A 1–2 letter unfinished word with nothing found yet: not a verdict (Enter searches it as typed).
+    if (!shown && !hidden && res.state === 'ok' && res.hints.some(h => h.code === 'keepTyping') && wordCount(value) <= 1) {
+      // A query that is a single 1–2 letter unfinished word, with nothing found yet: not a verdict (Enter searches it as
+      // typed). A longer query ending in a short word ("it ends with us") may be complete, so it gets the no-results box.
       ui.summary.textContent = TEXT.keepTyping;
       out.append(el('p', { class: 'hint' }, ...hintList(res, false)));
       return;
@@ -807,7 +845,7 @@
     ui.summary.textContent = summary.join(' · ');
 
     if (res.truncated) out.append(el('p', { class: 'note' }, TEXT.truncated));
-    if (hidden) out.append(hiddenNote(hidden, shown));
+    if (hidden) out.append(hiddenNote(hidden, shown, 'single'));
 
     if (main.shown.length) {
       out.append(section({ key: 'main', title: 'Listings found', hits: main.shown, limit: LIMITS.main, level: 2, noun: 'listings' }));
@@ -835,19 +873,21 @@
     }
   }
 
-  // Each line is counted once: with matches, possible matches only, matches all hidden by the filter, couldn't be
-  // searched (an error), not searched (only common words), or without a listing. Only the last is "no listing".
+  // Each line is counted once: with matches, matches all hidden by the filter (even beside visible possible matches),
+  // possible matches only, couldn't be searched (an error), not searched (only common words), or without a listing.
+  // Only the last is "no listing". The summary also totals the listings the filter hides on every line.
   function renderMulti(run, out) {
-    let withMatches = 0, possibleOnly = 0, hiddenOnly = 0, failed = 0, notSearched = 0, without = 0;
+    let withMatches = 0, possibleOnly = 0, hiddenOnly = 0, failed = 0, notSearched = 0, without = 0, hiddenTotal = 0;
     const blocks = run.lines.map((ln, i) => {
       const res = ln.result;
       const main = splitHidden(res.main), possible = splitHidden(res.possible), prefix = splitHidden(res.isbnPrefix);
       const shown = main.shown.length + possible.shown.length + prefix.shown.length;
       const hidden = main.hidden + possible.hidden + prefix.hidden;
       const commonOnly = res.state === 'stopwordsOnly' && !shown && !hidden;
+      hiddenTotal += hidden;
       if (main.shown.length) withMatches++;
+      else if (main.hidden || (hidden && !shown)) hiddenOnly++;
       else if (shown) possibleOnly++;
-      else if (hidden) hiddenOnly++;
       else if (res.state === 'error') failed++;
       else if (commonOnly) notSearched++;
       else without++;
@@ -864,7 +904,7 @@
 
       if (res.state === 'error') sec.append(el('p', { class: 'warning' }, 'Something went wrong with this line (' + res.message + ').'));
       if (res.truncated) sec.append(el('p', { class: 'note' }, TEXT.truncated));
-      if (hidden) sec.append(hiddenNote(hidden, shown));
+      if (hidden) sec.append(hiddenNote(hidden, shown, 'l' + i));
       if (main.shown.length) appendHits(sec, 'l' + i + ':main', main.shown, LIMITS.main, 3, 'listings');
       if (possible.shown.length) {
         sec.append(section({ key: 'l' + i + ':possible', title: 'Possible matches', hits: possible.shown, limit: LIMITS.possible, level: 3, noun: 'possible matches' }));
@@ -889,7 +929,8 @@
     if (failed) counts.push(fmtInt(failed) + " couldn't be searched");
     if (notSearched) counts.push(fmtInt(notSearched) + ' not searched (only common words)');
     counts.push(fmtInt(without) + ' without');
-    ui.summary.textContent = run.lines.length + ' lines: ' + counts.join(', ');
+    ui.summary.textContent = run.lines.length + ' lines: ' + counts.join(', ') +
+      (hiddenTotal ? ' · ' + plural(hiddenTotal, 'listing', 'listings') + ' hidden by the Banned By filter' : '');
     if (without) {
       // One shared "why it may differ" block for every line without a listing.
       const box = el('div', { class: 'no-results', role: 'region', 'aria-label': 'Lines with no listing' });
@@ -927,7 +968,7 @@
     parent.append(container);
     state.sectionEls.set(key, container);
     if (cut < hits.length) {
-      const b = el('button', { type: 'button' }, 'Show all ' + fmtInt(hits.length) + ' ' + noun);
+      const b = el('button', { type: 'button', 'data-key': 'more:' + key }, 'Show all ' + fmtInt(hits.length) + ' ' + noun);
       b.addEventListener('click', () => {
         state.expanded.add(key);
         renderResults();
