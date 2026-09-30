@@ -9,7 +9,8 @@
 //   res   = CensorEngine.search(c.q, ix, { enter: !!c.enter })
 //   Row ids: S<n> = Sheet1 row n and O<n> = Other Materials row n (sample rows, via rowId() in test/helpers/sample.js);
 //            XA*, XN*, XS*, XT*, XR*, XC* = syntheticRows ids (toRow keeps them as row.testId, which rowId() returns).
-//   Suites skip these cases when the sample .xlsx is absent (every case assumes sample + synthetic rows together).
+//   Every case assumes sample + synthetic rows together. When the sample .xlsx is absent (CI), a case that names only synthetic
+//   rows runs on the synthetic rows alone, unless it is marked needsSample: true (its outcome depends on a sample row it does not name).
 //   q is passed exactly as written: a trailing space is meaningful (the last word is then finished, not a prefix).
 //
 // EXPECT VOCABULARY (every listed condition must hold; lists are never exhaustive)
@@ -458,7 +459,7 @@ const cases = [
   { rule: 'AUT-7', q: 'canfield and hansen', expect: { possible: ['S10'], notMain: ['S10'] } },
   { rule: 'AUT-7', q: 'jack canfield and mark victor hansen', expect: { possible: ['S10'], notMain: ['S10'], reasons: [{ row: 'S10', includes: '1 of 2 authors' }] }, note: 'Two authors are named, so a row with one of them is Possible although only 2 of 5 words match.' },
   { rule: 'AUT-7', q: 'capecci & ziegler', expect: { possible: ['S18'], notMain: ['S18'] } },
-  { rule: 'AUT-7', q: 'mark victor hansen', expect: { maxMain: 0, hint: 'etAl' } },
+  { rule: 'AUT-7', q: 'mark victor hansen', expect: { maxMain: 0, hint: 'etAl' }, needsSample: true, note: "The etAl hint needs an 'Et Al' row (S10)." },
   { rule: 'AUT-8', q: 'arora press', expect: { match: ['S5'] }, note: "The prototype gives Possible because it requires 'press'." },
   { rule: 'AUT-8', q: 'arora publishers', expect: { match: ['S5'] } },
   { rule: 'AUT-8', q: 'arora inc', expect: { match: ['S5'] } },
@@ -466,7 +467,7 @@ const cases = [
   { rule: 'AUT-9', q: 'kite', expect: { first: 'XS8', main: ['XS8', 'XS9'], before: [['XS8', 'XS9']] }, note: 'One-word query: the author hit ranks above the title hit; the prototype ranks the title first.' },
   { rule: 'AUT-9', q: 'green kite', expect: { first: 'XS9', match: ['XS9'], notMain: ['XS8'] } },
   { rule: 'AUT-9', q: 'wren', expect: { first: 'XC1', main: ['XC1', 'XA26', 'XS5', 'XR5', 'XT3'], before: [['XC1', 'XA26'], ['XR5', 'XT3']] }, note: "Resolved order: a whole-title-equal row ('The Wren') first, then author hits (Tobias Wren), then title-only hits (the prefix 'Wrenfield')." },
-  { rule: 'AUT-10', q: 'orwell zebra crossing', expect: { possible: ['XS16'], reasons: [{ row: 'XS16', includes: 'author not listed' }] }, note: "'N/A' counts as no author for the missing-author rule." },
+  { rule: 'AUT-10', q: 'orwell zebra crossing', expect: { possible: ['XS16'], reasons: [{ row: 'XS16', includes: 'author not listed' }] }, needsSample: true, note: "'N/A' counts as no author for the missing-author rule ('orwell' is an author word through S9)." },
   { rule: 'AUT-10', q: 'unknown', expect: { absent: ['XS17'] }, note: 'Placeholder authors are not indexed.' },
   { rule: 'AUT-10', q: 'tidewater hymnal unknown', expect: { close: ['XS17'], reasons: [{ row: 'XS17', includes: 'the whole listed title is in your search' }] }, note: "'unknown' can't match the placeholder (that would make it a Match); the reverse check makes it Close." },
   { rule: 'AUT-10', q: 'n/a', expect: { absent: ['XS16', 'S8', 'S17'] } },

@@ -1,8 +1,10 @@
 // Tests for src/engine.js (CensorEngine).
 //   1. unit tests: fold, tokenizer alternates, ISBNs, display titles, splitLines, highlights (synthetic rows only);
 //   2. regression: the 180 prototype/queries.js queries on the sample rows, with the PRD overrides of test/prd-cases.js;
-//   3. PRD acceptance: every case of test/prd-cases.js, one test per case.
-// Suites 2 and 3 need the gitignored sample .xlsx in the repo root and skip with a message when it is absent.
+//   3. PRD acceptance: every case of test/prd-cases.js, one test per case;
+//   4. review fixes (invented rows only).
+// Suite 2 needs the gitignored sample .xlsx in the repo root and skips with a message when it is absent. Without it (as in CI),
+// suite 3 still runs every case that names only synthetic rows, on the synthetic rows alone (COV-5).
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -318,10 +320,14 @@ function checkCase(c, res) {
 const summaryOf = res => `main=[${res.main.map(h => rowId(h.row) + ':' + h.tier[0]).join(' ')}] possible=[${ids(res.possible).join(' ')}] ` +
   `isbnPrefix=[${ids(res.isbnPrefix).join(' ')}] state=${res.state} hints=[${res.hints.map(h => h.code).join(',')}]`;
 
+// The row ids a case names; a case naming no sample row (S…/O…) and not marked needsSample also holds on the synthetic rows alone.
+const caseIds = x => ['match', 'close', 'main', 'possible', 'isbnPrefix', 'any', 'absent', 'notMain'].flatMap(k => x[k] || [])
+  .concat(x.first ? [x.first] : [], (x.before || []).flat(), ['reasons', 'notes', 'displayTitle'].flatMap(k => (x[k] || []).map(e => e.row)));
+const offline = c => !c.needsSample && caseIds(c.expect).every(id => !/^[SO]\d/.test(id));
 for (const c of cases) {
   const name = `${c.rule}: ${JSON.stringify(c.q.length > 70 ? c.q.slice(0, 67) + '…' : c.q)}${c.enter ? ' (Enter)' : ''}`;
-  test(name, { skip: SKIP_SAMPLE }, () => {
-    const res = E.search(c.q, sample().ix, { enter: !!c.enter });
+  test(name, { skip: SKIP_SAMPLE && !offline(c) ? SKIP_SAMPLE : false }, () => {
+    const res = E.search(c.q, SKIP_SAMPLE ? synth() : sample().ix, { enter: !!c.enter });
     const fail = checkCase(c, res);
     assert.deepEqual(fail, [], `${fail.join('; ')}\n      ${summaryOf(res)}`);
   });
@@ -368,4 +374,294 @@ test('aliases widen a query only through a complete alias name, labelled "via al
   assert.ok(!ids(E.search("philosopher's stone of brackenmoor", E.buildIndex(synthRows())).main).includes('XS21'));
   const bad = E.buildIndex(synthRows(), { aliases: { aliases: [{ names: ['only one'] }, null, { names: [1, 2] }] } });
   assert.equal(bad.aliases.length, 0);
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// 4. Review fixes: invented rows only (never copies of the sample list), so these run in CI too
+// ---------------------------------------------------------------------------------------------------------------
+const mini = (rows, opts) => E.buildIndex(rows.map((r, i) => toRow(Object.assign({ bannedBy: 'KES', type: 'Book' }, r), i)), opts);
+const tierIn = (res, id) => { const h = find(res, id); return h ? (res.main.includes(h) ? h.tier : res.possible.includes(h) ? 'possible' : 'isbnPrefix') : 'absent'; };
+
+test('lookup tables have no prototype keys: "constructor" is an ordinary word (E3-02, SEC-05)', () => {
+  const ix = mini([{ id: 'C1', title: 'LEGO Constructor Ideas' }, { id: 'C2', title: 'Fun with Phonics' }, { id: 'C3', title: 'The Constructer Kit' }]);
+  for (const q of ['fun', 'func', 'function']) assert.doesNotThrow(() => E.search(q, ix), q);
+  assert.deepEqual(ids(E.search('fun', ix).main), ['C2']);
+  assert.ok(ids(E.search('constructer ', ix).possible).includes('C1'));                 // one edit, fuzzy again
+  assert.deepEqual(terms('constructor'), [['constructor']]);
+  assert.deepEqual(words('lego constructor 3').pairs, []);
+});
+test('initials with the letter a: A.I., S.W.A.T., U.S.A., A. A. Milford (E1-01)', () => {
+  for (const [q, w] of [['A.I.', 'ai'], ['S.W.A.T.', 'swat'], ['U.S.A.', 'usa'], ['a.i.', 'ai']]) assert.deepEqual(words(q).map(x => x.w), [w], q);
+  assert.deepEqual(words('A. A. Milford').map(x => x.w), ['aa', 'milford']);
+  assert.deepEqual(words('Plan A. Twelve Years a Slave').map(x => x.w), ['plan', 'a', 'twelve', 'years', 'a', 'slave']);
+  const ix = mini([{ id: 'A1', title: 'S.W.A.T. Team Handbook' }, { id: 'A2', title: 'A.I. Artificial Intelligence' }, { id: 'A3', title: 'I Am Here', author: 'Nadia Yousef' },
+    { id: 'A4', title: 'Winnie Walks', author: 'A. A. Milford' }, { id: 'A5', title: 'Made in the U.S.A.' }, { id: 'A6', title: 'Sea Glass', author: 'Tui T. Sherwood' }]);
+  assert.equal(tierIn(E.search('swat', ix), 'A1'), 'match');
+  assert.equal(tierIn(E.search('AI', ix, { enter: true }), 'A2'), 'match');
+  assert.equal(tierIn(E.search('ai artificial intelligence', ix), 'A2'), 'match');
+  assert.equal(tierIn(E.search('aa milford', ix), 'A4'), 'match');
+  assert.equal(tierIn(E.search('made in usa', ix), 'A5'), 'match');
+  assert.deepEqual(ids(E.search('a.i.', ix).main), ['A2']);                             // not every title with the word "I"
+  assert.deepEqual(ids(E.search('s.w.a.t.', ix).main), ['A1']);
+});
+test('the word being typed reaches the numbers and abbreviations it starts (E1-02, E2-11, E3-08, E4-03)', () => {
+  const ix = mini([{ id: 'N1', title: '7th Lantern, The' }, { id: 'N2', title: '13 Quiet Harbors' }, { id: 'N3', title: '20,000 Fathoms Below' },
+    { id: 'N4', title: '451 Ember Street' }, { id: 'N5', title: '211 Brass Keys' }, { id: 'N6', title: '60 Seconds of Rain Volume 2' },
+    { id: 'N7', title: "Mr. Pemberly's Kites" }, { id: 'N8', title: 'St. Aldric Tales' }, { id: 'N9', title: 'Dr. Hollis Remedies' },
+    { id: 'N10', title: '1984 Almanac', author: 'Ada Mercer' }, { id: 'N11', title: '2nd Helping of Porridge, A' }]);
+  const cases = { 'the sev': 'N1', 'the sevent': 'N1', thirt: 'N2', thirtee: 'N2', 'twenty thousan': 'N3', 'twenty tho': 'N3', 'ember four fif': 'N4',
+    'two ele': 'N5', 'two eleve': 'N5', 'sixty second': 'N6', mis: 'N7', miste: 'N7', sain: 'N8', doc: 'N9', docto: 'N9', 'mercer nineteen eig': 'N10',
+    'nineteen eighty': 'N10', 'nineteen eighty-fou': 'N10', 'a secon': 'N11' };
+  for (const [q, id] of Object.entries(cases)) assert.equal(tierIn(E.search(q, ix), id), 'match', q);
+  assert.equal(tierIn(E.search('the seventh', ix), 'N1'), 'match');                   // the finished words still work
+  assert.equal(tierIn(E.search('twenty one', ix), 'N3'), 'absent');                     // a finished number word is not a prefix
+});
+test('a split compound whose second half is being typed reaches the joined word (E1-03)', () => {
+  const ix = synth();
+  for (const q of ['sand cas', 'sand cast', 'sand castl']) assert.equal(tierIn(E.search(q, ix), 'XS18'), 'close', q);
+});
+test('a query in the sheet\'s inverted form keeps prefix matching on the word being typed (E1-04)', () => {
+  const ix = synth();
+  assert.equal(tierIn(E.search('Alchemist, The: A Fab', ix), 'XA1'), 'match');
+  assert.equal(tierIn(E.search('Glass Owl, The – A Win', ix), 'XA26'), 'match');
+  assert.equal(tierIn(E.search('Velvet Quarry, The', ix), 'XT7'), 'match');
+});
+test('"n" between two words is the optional "and" of rock \'n\' roll (E1-05)', () => {
+  const ix = mini([{ id: 'K1', title: "Rock 'n' Roll High School" }, { id: 'K2', title: "Guns N' Roses: The Photos" }, { id: 'K3', title: 'Rock and Roll Hall of Fame' }]);
+  assert.deepEqual(E.search('rock n roll', ix).main.map(h => rowId(h.row) + ':' + h.tier), ['K1:match', 'K3:match']);
+  assert.equal(tierIn(E.search('guns n roses', ix), 'K2'), 'match');
+  assert.equal(tierIn(E.search('rock n', ix), 'K1'), 'possible');                       // at the end it is still a required letter
+});
+test('opts.finished: a line of a pasted list is complete text, with no prefix matching (E1-06)', () => {
+  const ix = mini([{ id: 'W1', title: 'War Horse' }, { id: 'W2', title: 'Warden Tales' }]);
+  assert.deepEqual(ids(E.search('War', ix, { enter: true }).main), ['W1', 'W2']);
+  assert.deepEqual(ids(E.search('War', ix, { enter: true, finished: true }).main), ['W1']);
+});
+test('splitLines: list markers in a list of 2+ lines, and PowerPoint line breaks (E1-07, E1-10)', () => {
+  assert.deepEqual(E.splitLines('1. Fahrenheit 451\n2. 1984\n3) The 7th Knot\n(4) Holes\n- Wonder\n• Matilda'), ['Fahrenheit 451', '1984', 'The 7th Knot', 'Holes', 'Wonder', 'Matilda']);
+  assert.deepEqual(E.splitLines('Fahrenheit 451\u000B1984\u000CThe 7th Knot'), ['Fahrenheit 451', '1984', 'The 7th Knot']);
+  assert.deepEqual(E.splitLines('1. Fahrenheit 451'), ['1. Fahrenheit 451']);           // one line is left as typed
+  const ix = mini([{ id: 'L1', title: '1984 Almanac' }, { id: 'L2', title: 'Harbor Stories Volume 2' }]);
+  assert.deepEqual(ids(E.search(E.splitLines('1. Harbor Stories\n2. 1984')[1], ix, { enter: true }).main), ['L1']);
+});
+test('display title: invisible characters, "/", "!", "?", symbols and a doubled comma before the article (E1-09, E4-11)', () => {
+  const cases = { 'Hobbit, The\u200B': 'The Hobbit', 'Hobbit, The\u200E': 'The Hobbit', 'Alchemist, The / Paulo Coelho': 'The Alchemist / Paulo Coelho',
+    'Hobbit,, The': 'The Hobbit', 'Grinch, The!': 'The Grinch!', 'Crucible, The\u00AE: A Play': 'The Crucible\u00AE: A Play', 'Hello, A-Team': 'Hello, A-Team' };
+  for (const [a, b] of Object.entries(cases)) assert.equal(E.normalizeTitleForDisplay(a), b, a);
+});
+test('explanations name the cell text that matched: two number groups, and no ordinal crossing beside a prefix (E1-12)', () => {
+  const ix = mini([{ id: 'Q1', title: '20 10-Minute Skits' }, { id: 'Q2', title: '60 Seconds of Rain Volume 2' }]);
+  assert.ok(find(E.search('twenty ten minute skits', ix), 'Q1').reasons.includes('twenty ten = 20 10'));
+  const h = find(E.search('60 second', ix), 'Q2');
+  assert.deepEqual([h.tier, h.reasons, h.highlights.title], ['match', [], [[0, 2], [3, 9]]]);
+});
+test('"book", "#" and "year" never pair with a number of 100 or more (E2-01, E1-08, E2-09)', () => {
+  assert.deepEqual(words('book 1984 #451 year 2023 Book 3 #3 Year 7').pairs.map(p => p.terms[0]), ['#book3', '#book3', '#year7']);
+  const ix = mini([{ id: 'B1', title: '1984 Almanac', author: 'Ada Mercer', year: '2023-2024' }, { id: 'B2', title: 'Harbor Stories Book 3' },
+    { id: 'B3', title: '101 Creepy Riddles' }, { id: 'B4', title: '451 Farenheit Notes' }]);
+  for (const q of ['book 1984', 'the book 1984', 'is the book 1984 banned?', '#1984', 'mercer 1984 year 2023-2024', 'mercer banned year 2023/24']) {
+    assert.equal(tierIn(E.search(q, ix), 'B1'), 'match', q);
+  }
+  assert.equal(tierIn(E.search('book 101 creepy riddles', ix), 'B3'), 'match');
+  assert.equal(tierIn(E.search('farenheit #451', ix), 'B4'), 'match');
+  assert.equal(tierIn(E.search('#3', ix, { enter: true }), 'B2'), 'match');
+});
+test('label lists and Roman ranges name every volume; no single-volume note for them (E2-02, E4-01, E4-12)', () => {
+  const pairs = q => words(q).pairs.flatMap(p => p.terms);
+  assert.deepEqual(pairs('Books 1 & 2'), ['#book1', '#book2']);
+  assert.deepEqual(pairs('Volumes 1, 2 and 3'), ['#book1', '#book2', '#book3']);
+  assert.deepEqual(pairs('Volumes I–III'), ['#book1', '#book2', '#book3']);
+  assert.deepEqual(pairs('Parts One and Two'), ['#part1', '#part2']);
+  assert.deepEqual(pairs('Book 1 and the Chamber, Grade 5 and Up'), ['#book1', '#grade5']);
+  const ix = mini([{ id: 'V1', title: 'Hunger Trials Books 1 & 2', author: 'Suri Collins' }, { id: 'V2', title: 'Quiz Bowl Volumes 1, 2 and 3' },
+    { id: 'V3', title: 'Encyclopedia of Space Volumes I–III' }, { id: 'V4', title: 'Maths Parts 1 & 2' }, { id: 'V5', title: 'Beethoven Symphony No. 9' }]);
+  for (const [q, id] of [['hunger trials book 2', 'V1'], ['quiz bowl volume 3', 'V2'], ['encyclopedia of space volume 2', 'V3'], ['maths part 2', 'V4']]) {
+    const h = find(E.search(q, ix), id);
+    assert.equal(h.tier, 'match', q);
+    assert.ok(!h.notes.some(n => /only\.$/.test(n)), q);
+  }
+  assert.equal(tierIn(E.search('hunger trials book 3', ix), 'V1'), 'possible');
+  assert.deepEqual(find(E.search('beethoven symphony', ix), 'V5').notes, ['This listing names No. 9 only.']);
+});
+test('the rest of a work\'s group joins an ISBN or memo hit, Ministry row first, in the prefix group too (E2-03, E2-12)', () => {
+  const ix = mini([{ id: 'G1', title: 'The Kite Racer', author: 'Karim Hosseyni', isbn: '9781594631931' }, { id: 'G2', title: 'Kite Racer, The', author: 'Karim Hosseyni', bannedBy: 'Ministry' },
+    { id: 'G3', title: 'Looking for Alaska Bay', author: 'Jon Greer', memo: '88213' }, { id: 'G4', title: 'Looking for Alaska Bay', author: 'Jon Greer', bannedBy: 'Ministry' },
+    { id: 'G5', title: 'Crank Valley', author: 'Ellen Hopp', isbn: '9781481443203' }, { id: 'G6', title: 'Crank Valley', author: 'Ellen Hopp', isbn: '9781481443203', bannedBy: 'Ministry' }]);
+  for (const q of ['9781594631931', '1594631930']) {
+    const r = E.search(q, ix);
+    assert.deepEqual(r.main.map(h => rowId(h.row) + ':' + h.tier + ':' + h.groupSize), ['G2:close:2', 'G1:match:2'], q);
+    assert.deepEqual(r.main[0].reasons, ['same title and author as another result']);
+  }
+  assert.deepEqual(ids(E.search('88213', ix).main), ['G4', 'G3']);
+  assert.deepEqual(E.search('978159463', ix).isbnPrefix.map(h => rowId(h.row) + ':' + h.groupSize), ['G2:2', 'G1:2']);
+  assert.deepEqual(E.search('978-1-4814-4', ix).isbnPrefix.map(h => rowId(h.row) + ':' + h.groupSize), ['G6:2', 'G5:2']);
+});
+test('ISBN cells: pbk tags, two ISBNs with a space, labels, Unicode dashes, digit-group commas (E2-04)', () => {
+  const runs = v => E._internal.isbnRuns(v).map(x => x.d);
+  assert.deepEqual(runs('978-0-374-37152-4 (pbk.)'), ['9780374371524']);
+  assert.deepEqual(runs('9780062498533 9780062498540'), ['9780062498533', '9780062498540']);
+  assert.deepEqual(runs('ISBN 9780142402511 ISBN 9780525475064'), ['9780142402511', '9780525475064']);
+  assert.deepEqual(runs('978-1-250-01257-9 (hbk) / 978-1-250-06747-0 (pbk)'), ['9781250012579', '9781250067470']);
+  assert.deepEqual(runs('978\u20130\u2013525\u201347881\u20132'), ['9780525478812']);
+  assert.deepEqual(runs('978\u20111\u201159448\u2011000\u20113'), ['9781594480003']);
+  assert.deepEqual(runs('9,781,400,033,416'), ['9781400033416']);
+  assert.deepEqual(runs('0306406152 9780306406157'), ['0306406152', '9780306406157']);
+  const [x] = E._internal.isbnRuns('978-0-374-37152-4 (pbk.)');
+  assert.deepEqual([x.s, x.e], [0, 17]);
+});
+test('ISBN queries: Unicode dashes, 978- in a longer query, two ISBNs on a line, a lost leading zero (E2-06, E2-07, E2-08, E2-14, E4-09)', () => {
+  const ix = synth();
+  for (const q of ['0\u2013306\u201340615\u20132', '0\u2011306\u201140615\u20112', 'ISBN\u201010: 0-306-40615-2', 'lighthouse keeper 978-0306406157',
+    'ISBN-10: 0306406152 ISBN-13: 978-0306406157', '0306406152 9780306406157', 'ISBN 0-306-40615-2 0-9752298-0-X', '9780306406157 2023-2024', '306406152']) {
+    assert.ok(ids(E.search(q, ix).main).includes('XT9'), q);
+  }
+  assert.deepEqual(ids(E.search('ISBN 0-306-40615-2 0-9752298-0-X', ix).main).sort(), ['XT10', 'XT9']);
+  const r = E.search('ISBN\u201013: 979-8-89180-854-6', ix);
+  assert.equal(r.isbnQuery, true);
+  assert.ok(!ids(r.main).length && r.hints.some(h => h.code === 'isbnNoMatch'));        // '13' is part of the label, not a title word
+  const t = E.search('101 451', mini([{ id: 'D1', title: '101 Dalmatians' }]));
+  assert.deepEqual([t.isbnQuery, ids(t.possible)], [false, ['D1']]);                     // two title numbers, not an ISBN
+});
+test('a year range being typed never blocks a match (E2-10)', () => {
+  const ix = mini([{ id: 'Y1', title: 'Harbor Nights', author: 'Ada Mercer', year: '2023-2024' }]);
+  for (const q of ['mercer 2023-', 'mercer 2023-2', 'mercer 2023-20', 'mercer 2023-202', 'mercer 2023/2', 'mercer 2023-2024']) assert.equal(tierIn(E.search(q, ix), 'Y1'), 'match', q);
+  assert.equal(tierIn(E.search('mercer 2023', ix), 'Y1'), 'possible');                  // a lone year stays a title word
+  assert.equal(E.search('2023-202', ix).isbnQuery, false);
+});
+test('aliases.json: WWII and World War II find each other (E2-13)', () => {
+  const ix = mini([{ id: 'W1', title: 'World War II: A Visual History' }, { id: 'W2', title: 'WWI Trench Letters' }], { aliases: require('../aliases.json') });
+  for (const q of ['wwii', 'ww2', 'world war 2', 'second world war']) assert.equal(tierIn(E.search(q, ix), 'W1'), 'match', q);
+  for (const q of ['world war one', 'world war i', 'wwi']) assert.equal(tierIn(E.search(q, ix), 'W2'), 'match', q);
+});
+test('no Roman numerals in names; misspelt run-together numbers (E2-15, E2-16)', () => {
+  const ix = mini([{ id: 'X1', title: 'The Governance of Rivers', author: 'Xi Jinping' }]);
+  assert.equal(tierIn(E.search('11', ix), 'X1'), 'absent');
+  assert.deepEqual(terms('ninteeneightyfour fourtyfive'), [['ninteeneightyfour', '1984'], ['fourtyfive', '45']]);
+});
+test('authorless rows stay Possible for "title by First Last", a misspelt surname, or a whole one-word title (E3-01)', () => {
+  const ix = mini([{ id: 'H1', title: 'Holes', type: 'DVD' }, { id: 'H2', title: 'Wonder' }, { id: 'H3', title: 'Matilda', author: 'N/A' },
+    { id: 'H4', title: 'Quartz Almanac', author: 'Ada Mercer' }, { id: 'H5', title: 'Quartz Almanac Study Guide' }]);
+  for (const [q, id] of [['holes by louis sachar', 'H1'], ['holes louis sachar', 'H1'], ['wonder by r.j. palacio', 'H2'], ['matilda by roald dahl', 'H3'], ['ada mercr quartz', 'H5']]) {
+    const h = find(E.search(q, ix), id);
+    assert.ok(h && !E.search(q, ix).main.includes(h) && h.reasons.includes('author not listed'), q);
+  }
+});
+test('two-author queries: semicolons, full names split by a comma, initials inside a name (E3-03, E3-04)', () => {
+  const ix = mini([{ id: 'T1', title: 'Soup for Sailors', author: 'Jonas Pell Et Al' }]);
+  for (const q of ['Pell, J., & Hart, M. V.', 'Pell, Jonas; Hart, Mara Vey', 'Jonas Pell (Author), Mara Vey Hart (Author)', 'jonas pell, mara vey hart']) {
+    const r = E.search(q, ix);
+    assert.ok(ids(r.possible).includes('T1') && find(r, 'T1').reasons.includes('matched 1 of 2 authors'), q);
+  }
+  const codes = E.search('Hart, M. V.', ix).hints.map(h => h.code);
+  assert.ok(!codes.includes('keepTyping') && codes.includes('etAl'), codes.join());
+});
+test('"given names differ" only when they do: the matched person\'s given names, prefixes, merged initials (E3-05)', () => {
+  const ix = mini([{ id: 'M1', title: 'Game of Crowns', author: 'Gideon R. R. Marsh' }, { id: 'M2', title: 'Speak Softly', author: 'Laurie Halse Andrews' },
+    { id: 'M3', title: 'Monsoon Fair', author: 'Priya Nand (Author), Lotte Brand (Illustrator)' }, { id: 'M4', title: 'Chowder Days', author: 'Jonas Pell, Mara Vey Hart' },
+    { id: 'M5', title: 'Say Cheese', author: 'Jovial Bob Stone' }]);
+  for (const [q, id] of [['g.r.r. marsh', 'M1'], ['g. marsh', 'M1'], ['l. andrews', 'M2'], ['p nand', 'M3'], ['l. brand', 'M3'], ['m. v. hart', 'M4'], ['j. pell', 'M4']]) {
+    const h = find(E.search(q, ix), id);
+    assert.deepEqual([h.tier, h.reasons.includes('given names differ')], ['match', false], q);
+  }
+  assert.ok(find(E.search('r.l. stone', ix), 'M5').reasons.includes('given names differ'));
+});
+test('short words: not waived beside a fuzzy author hit, never a listed surname, nor when the author is fully named (E3-06, E4-06)', () => {
+  const ix = mini([{ id: 'S1', title: 'Little Fires', author: 'Odile Ng' }, { id: 'S2', title: 'Celestial Maps', author: 'Odile Harrow' },
+    { id: 'S3', title: 'Pasta at Home', author: 'Guido Ferri' }, { id: 'S4', title: 'TV Guide Crosswords' }, { id: 'S5', title: 'Matilda Rises', author: 'Dahl, Roald', bannedBy: 'Ministry' }]);
+  assert.deepEqual(ids(E.search('odile ng', ix).main), ['S1']);
+  assert.ok(!ids(E.search('tv guide', ix).main).includes('S3'));
+  assert.equal(tierIn(E.search('the bfg roald dahl', ix), 'S5'), 'possible');
+});
+test('aliases while the last alias word is typed, and in "Last, First" order (E3-07)', () => {
+  const ix = mini([{ id: 'P1', title: 'Grim Lanterns', author: 'Quill Sparrow' }], { aliases: { aliases: [{ kind: 'pen name', names: ['Pip Arden', 'Quill Sparrow'] }] } });
+  for (const q of ['pip ard', 'pip arde', 'Arden, Pip']) assert.ok(find(E.search(q, ix), 'P1').reasons.some(x => x.startsWith('via alias')), q);
+});
+test('plural alternates for -o / -oes (E3-09)', () => {
+  const ix = mini([{ id: 'O1', title: 'Heroes of Olympus' }, { id: 'O2', title: 'Hero' }, { id: 'O3', title: 'Tomatoes in the Garden' }]);
+  assert.equal(tierIn(E.search('hero of olympus ', ix), 'O1'), 'match');
+  assert.equal(tierIn(E.search('heroes ', ix), 'O2'), 'match');
+  assert.equal(tierIn(E.search('tomato garden ', ix), 'O3'), 'match');
+});
+test('placeholder authors with role words or "Various Artists" are blank (E3-10)', () => {
+  const ix = mini([{ id: 'U9', title: 'Quartz Almanac', author: 'Ada Mercer' }].concat(['Various Artists', 'Author Unknown', 'Anonymous Author', 'No Author',
+    'Multiple Authors'].map((author, i) => ({ id: 'U' + i, title: ['Folk', 'Sea', 'Road', 'Camp', 'Rain'][i] + ' Songs', author }))));
+  assert.equal(E.search('various', ix).main.length + E.search('unknown', ix).main.length, 0);
+  const hits = E.search('ada mercer songs', ix).possible.filter(h => rowId(h.row) !== 'U9');
+  assert.deepEqual(ids(hits).sort(), ['U0', 'U1', 'U2', 'U3', 'U4']);
+  assert.ok(hits.every(h => h.reasons.includes('author not listed') && h.groupKey.endsWith('|')));   // blank for matching and grouping
+});
+test('role and publisher words are required where a listed title has them, unless beside an author word (E3-11)', () => {
+  const ix = synth();
+  assert.equal(tierIn(E.search('mr. men', ix), 'XN10'), 'possible');                    // "Mr. Quimby's Lanterns" makes "mr" a title word
+  assert.equal(tierIn(E.search('mr fairbrass', ix), 'XS14'), 'match');
+  assert.equal(tierIn(E.search('nandakumar editor', ix), 'XS15'), 'match');
+});
+test('one-word author typo: the author\'s row leads; fields follow the highlighted hits (E3-12, E3-13)', () => {
+  const ix = mini([{ id: 'F1', title: 'Munchet Garden' }, { id: 'F2', title: 'Sunshine Munch Bars' }, { id: 'F3', title: 'Paper Bag Tales', author: 'Robert Munsch' },
+    { id: 'F4', title: 'Sing Down the Moon', author: 'Scott King' }]);
+  assert.equal(ids(E.search('munsh', ix).main)[0], 'F3');
+  assert.deepEqual(find(E.search('king ', ix), 'F4').fields, ['author']);
+});
+test('a foreign-article run never puts a similar spelling in the main list (E3-14)', () => {
+  const ix = mini([{ id: 'L1', title: 'Carrie', author: 'Stephen King' }, { id: 'L2', title: 'Petit Prince, Le' }]);
+  const r = E.search('le carre', ix);
+  assert.deepEqual(ids(r.main), []);
+  assert.ok(find(r, 'L1').reasons.includes('similar spelling: Carrie'));
+  assert.equal(tierIn(E.search('le petit prince', ix), 'L2'), 'match');
+});
+test('spelled-out given names that match the cell\'s initials; pasted author credits (E3-15, E3-16)', () => {
+  const ix = mini([{ id: 'I1', title: 'Say Cheese and Die!', author: 'R.L. Stone' }, { id: 'I2', title: 'Neverwhere Lane', author: 'Neil Gaimon' },
+    { id: 'I3', title: 'Hound of the Moors, The', author: 'Arthur Conan Dale' }]);
+  const h = find(E.search('robert lawrence stone', ix), 'I1');
+  assert.deepEqual([h.tier, h.reasons], ['close', ['robert lawrence = R.L.']]);
+  assert.equal(tierIn(E.search('Neil Gaimon (Goodreads Author)', ix), 'I2'), 'match');
+  assert.equal(tierIn(E.search('sir arthur conan dale', ix), 'I3'), 'match');
+  assert.equal(tierIn(E.search('Stone, R. L., 1943-', ix), 'I1'), 'match');
+});
+test('whole-series rows: lifted by the series name as the reverse check reads it, or the surname; not "Series 3" (E4-02, E4-08)', () => {
+  const ix = mini([{ id: 'Z1', title: 'Magic Tree House Series', author: 'Mary Pope Osborne' }, { id: 'Z2', title: 'Mary Poppins', author: 'P. L. Travers' },
+    { id: 'Z3', title: 'Shine Series', author: 'Lauren Myracle' }, { id: 'Z4', title: 'Stine Stories', author: 'Jovial Bob Stine' },
+    { id: 'Z5', title: 'Complete Works of Shakespeare, The', author: 'William Shakespeare' }, { id: 'Z6', title: 'Doctor Who Series 3', type: 'DVD' }]);
+  assert.equal(ids(E.search('mary poppins', ix).main)[0], 'Z2');
+  assert.ok(!ids(E.search('stine', ix).main).includes('Z3'));
+  assert.ok(!ids(E.search('william golding lord of the flies', ix).main).includes('Z5'));
+  assert.equal(ids(E.search('osborne', ix).main)[0], 'Z1');
+  assert.deepEqual(find(E.search('doctor who', ix), 'Z6').notes, []);
+});
+test('main lists Match hits before Close hits (E4-04, COV-12)', () => {
+  const ix = mini([{ id: 'R1', title: 'Moon Garden Secrets' }, { id: 'R2', title: 'Garden Moone, The' }]);
+  assert.deepEqual(E.search('garden moon ', ix).main.map(h => rowId(h.row) + ':' + h.tier), ['R1:match', 'R2:close']);
+});
+test('group keys read number words as digits (E4-05)', () => {
+  const ix = mini([{ id: 'E1', title: 'Seven Habits of Happy Teens', author: 'Sean Cove', bannedBy: 'Ministry' }, { id: 'E2', title: '7 Habits of Happy Teens, The', author: 'Sean Cove' }]);
+  const r = E.search('7 habits of happy teens', ix);
+  assert.deepEqual(r.main.map(h => rowId(h.row) + ':' + h.groupSize), ['E1:2', 'E2:2']);
+});
+test('authorHasOthers names the surname of "Last, Given" cells (E4-07)', () => {
+  const ix = mini([{ id: 'H1', title: 'Casual Vacancy, The', author: 'Rowling, J. K.' }, { id: 'H2', title: 'Strength to Love', author: 'King, Martin Luther' }]);
+  assert.ok(E.search('harry potter rowling', ix).hints.some(h => h.text === "Rowling, J. K. has other listed items; search 'Rowling'"));
+  assert.ok(E.search('i have a dream king', ix).hints.some(h => h.text === "King, Martin Luther has other listed items; search 'King'"));
+});
+test('questions around a title: question words are optional, and a label\'s number is not "keep typing" (E4-10)', () => {
+  const ix = mini([{ id: 'Q1', title: 'Speak', author: 'Laurie Halse Andrews' }, { id: 'Q2', title: 'World War I Letters' }, { id: 'Q3', title: 'World War II Letters' }]);
+  const r = E.search('can we read speak in grade 9', ix);
+  assert.ok(ids(r.possible).includes('Q1') && !r.hints.some(h => h.code === 'keepTyping'));
+  assert.equal(tierIn(E.search('can I use speak in class?', ix), 'Q1'), 'match');
+  assert.deepEqual(ids(E.search('world war i', ix).main), ['Q2']);                     // "i" is optional only in a question
+});
+test('reason wording: "#3 = Book 3", no "similar spelling" for a word also matched exactly, no initials from a URL (E4-12)', () => {
+  const ix = mini([{ id: 'J1', title: 'Harbor Series of Tales - The Low Tide -Book 3' }, { id: 'J2', title: '2nd Helping of Chicken Soup, A' },
+    { id: 'J3', title: '451 Farenheit', author: 'Ray Bradbury' }]);
+  assert.ok(find(E.search('low tide #3', ix), 'J1').reasons.includes('#3 = Book 3'));
+  assert.deepEqual(find(E.search('A 2nd Helping of Chicken Soup for the Soul', ix), 'J2').reasons, ['the whole listed title is in your search']);
+  assert.ok(!find(E.search('https://www.amazon.com/Fahrenheit-451-Ray-Bradbury/dp/1451673310/ref=sr_1_1', ix), 'J3').reasons.includes('given names differ'));
+});
+test('highlights cover a trailing combining accent (E4-13)', () => {
+  const ix = mini([{ id: 'HL', title: 'Poke\u0301mon Journeys', author: 'Charlotte Bronte\u0308' }]);
+  assert.deepEqual(find(E.search('bronte', ix), 'HL').highlights.author, [[10, 17]]);
+  assert.deepEqual(find(E.search('poke', ix), 'HL').highlights.title, [[0, 5]]);
+});
+test('ISBN no-match hint when every row has an ISBN (BROWSER-5)', () => {
+  const ix = mini([{ id: 'I1', title: 'Harbor Nights', isbn: '9780306406157' }, { id: 'I2', title: 'Quiet Bay', isbn: '9781451673319' }]);
+  assert.deepEqual(E.search('9780141036144', ix).hints.map(h => h.text), ['No ISBN match. Search the title and author too.']);
 });

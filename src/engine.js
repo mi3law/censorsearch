@@ -13,19 +13,21 @@
 
   // ---------- 0. vocabulary ----------
   const list = s => s.split(' ');
+  const table = o => Object.assign(Object.create(null), o);  // lookup tables: no prototype keys ("constructor" is an ordinary word)
   const SMALL = new Set(list('the a an of and or to in on at for by with from'));          // ignorable (AWO-2)
   const FORMAT = new Set(list('book books disc discs disk dvd dvds cd cds video videos vhs bluray paperback hardcover hardback ' +
     'softcover kindle ebook audiobook audio novel edition editions ed edn anniversary illustrated unabridged abridged deluxe ' +
     'reprint revised expanded'));                                                              // FIX F4: format words are soft
-  const QUESTION = new Set(list('is are was can could may banned ban allowed permitted prohibited'));
-  const ROLE = new Set(list('jr sr dr mr author authors editor editors ed illustrator illustrators translator translators'));
+  const QUESTION = new Set(list('is are was can could may banned ban allowed permitted prohibited ok okay appropriate suitable'));
+  const ASKING = new Set(list('i we use read teach class'));                // optional too in a question: "can we read speak in class"
+  const ROLE = new Set(list('jr sr dr mr sir dame prof rev author authors editor editors ed illustrator illustrators translator translators'));
   const PUBLISHER = new Set(list('company press publisher publishers books inc'));
   const FOREIGN_ART = new Set(list('le la les el los las il der die das'));
-  const PLACEHOLDER = new Set(list('unknown unknownauthor anonymous anon various variousauthors na none nil notknown notlisted ' +
-    'notavailable tbd tba'));
+  const PLACEHOLDER = new Set(list('unknown unknownauthor anonymous anon various variousauthors variousartists multipleauthors ' +
+    'noauthor unknownartist unknownartists na none nil notknown notlisted notstated notavailable tbd tba'));
   const EDITION_WORDS = new Set(list('edition ed edn anniversary'));
 
-  const UNITS = {}, TENS = {}, ORDS = {};
+  const UNITS = table({}), TENS = table({}), ORDS = table({});
   list('zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen seventeen ' +
     'eighteen nineteen').forEach((w, i) => { UNITS[w] = i; });
   list('twenty thirty forty fifty sixty seventy eighty ninety').forEach((w, i) => { TENS[w] = 20 + 10 * i; });
@@ -33,14 +35,23 @@
     'sixteenth seventeenth eighteenth nineteenth').forEach((w, i) => { ORDS[w] = i + 1; });
   list('twentieth thirtieth fortieth fiftieth sixtieth seventieth eightieth ninetieth').forEach((w, i) => { ORDS[w] = 20 + 10 * i; });
   ORDS.hundredth = 100; ORDS.thousandth = 1000;
-  const NUMW = Object.assign({ hundred: 100, thousand: 1000 }, UNITS, TENS);               // cardinal number words ('oh' is not one)
+  const NUMW = Object.assign(table({ hundred: 100, thousand: 1000 }), UNITS, TENS);               // cardinal number words ('oh' is not one)
   const isNumWord = w => NUMW[w] !== undefined || ORDS[w] !== undefined;
   // (b8) common misspellings, read before numbers and before fuzzy matching (the typed word stays literal too)
-  const MISSPELL = { ninteen: 'nineteen', ninty: 'ninety', fourty: 'forty', eigth: 'eighth', eigthy: 'eighty', twelth: 'twelfth',
-    nineth: 'ninth', fith: 'fifth', fourtieth: 'fortieth', eightteen: 'eighteen' };
+  const MISSPELL = table({ ninteen: 'nineteen', ninty: 'ninety', fourty: 'forty', eigth: 'eighth', eigthy: 'eighty', twelth: 'twelfth',
+    nineth: 'ninth', fith: 'fifth', fourtieth: 'fortieth', eightteen: 'eighteen' });
+  // (e1) number words a word being typed may become: "sevent" -> seventh, seventeen…; "nint" -> ninth, ninety (via "ninty")
+  const NUM_KEYS = Object.keys(NUMW).concat(Object.keys(ORDS), Object.keys(MISSPELL));
+  function numCompletions(w, self) {
+    const out = new Set();
+    for (const k of NUM_KEYS) if (k.startsWith(w) && (self || k !== w)) out.add(MISSPELL[k] || k);
+    return [...out];
+  }
+  const numForms = c => (ORDS[c] !== undefined ? [ORDS[c] + 'th', String(ORDS[c])] : [String(NUMW[c])]);
+  const ONE_TO_NINE = list('one two three four five six seven eight nine');
 
   // (b6) label + number pairs: label word -> key. FIX F7: class/grade/standard share the grade key.
-  const LABELS = {};
+  const LABELS = table({});
   const labelKey = (key, s) => list(s).forEach(w => { LABELS[w] = key; });
   labelKey('book', 'book books bk bks volume volumes vol vols number no nos num');
   labelKey('grade', 'grade grades gr class standard std');
@@ -56,7 +67,7 @@
   const FIELD_ORDER = [F_T, F_A, F_I, F_M, F_Y, F_B];                                      // order of Hit.fields (g6)
   // Hit kinds. exact-class = exact, alternate (incl. ordinal<->cardinal crossing), prefix.
   const K_EXACT = 0, K_ALT = 1, K_ALTX = 2, K_PREFIX = 3, K_COMP = 4, K_FZ1 = 5, K_FZ2 = 6, K_LOOSE = 7;
-  const KIND_W = [1, 0.9, 0.85, 0.8, 0.9, 0.6, 0.4, 0.3];
+  const KIND_W = [1, 0.9, 0.75, 0.8, 0.9, 0.6, 0.4, 0.3];                                  // a crossing is the weakest exact-class hit
   const KIND_CLASS = [3, 3, 3, 3, 2, 1, 1, 0];
   const isExactish = k => k <= K_ALTX;                                                      // exact or through an alternate
   const hitValue = h => (h.f >= F_Y ? 30 : KIND_CLASS[h.k] * 10) + KIND_W[h.k] * FIELD_W[h.f];
@@ -64,7 +75,7 @@
   // ---------- (a) fold: one normalizer for sheet cells and queries ----------
   const APOS = new Set(['\u0027', '\u2018', '\u2019', '\u201a', '\u201b', '\u2032', '\u02b9', '\u02bb', '\u02bc', '`', '\u00b4', '\uff07']);
   const SYMBOL_MARKS = new Set(['\u2122', '\u2120', '\u00a9', '\u00ae', '\u2117']);
-  const SPECIAL = { 'ß': 'ss', 'æ': 'ae', 'œ': 'oe', 'ø': 'o', 'đ': 'd', 'ð': 'd', 'ł': 'l', 'þ': 'th', 'ı': 'i' };
+  const SPECIAL = table({ 'ß': 'ss', 'æ': 'ae', 'œ': 'oe', 'ø': 'o', 'đ': 'd', 'ð': 'd', 'ł': 'l', 'þ': 'th', 'ı': 'i' });
   const DROP = /[\p{M}\p{Cf}]/u;
   const charCache = new Map();
   // One source character (code point) -> its folded text: apostrophes unified and marks spaced BEFORE NFKD (so ´ is not
@@ -110,7 +121,7 @@
     copy(last, st.s.length);
     return { s, a, b };
   }
-  const SYMBOLS = { 'c++': 'cplusplus', 'c#': 'csharp', 'f#': 'fsharp', 'a+': 'aplus' };      // PUNC-10 (a 4-entry table)
+  const SYMBOLS = table({ 'c++': 'cplusplus', 'c#': 'csharp', 'f#': 'fsharp', 'a+': 'aplus' });      // PUNC-10 (a 4-entry table)
   const SYMBOL_RE = /(?<=^|\s)(?:c\+\+|c#|f#|a\+)(?=$|[\s\p{P}\p{S}])/gu;
   // foldWithMap(text) -> { s: folded text, a, b }: folded char i came from source range [a[i], b[i]) (used for highlights).
   function foldWithMap(text) {
@@ -143,12 +154,13 @@
 
   // ---------- (g5) display title: move a trailing article back to the front ----------
   const ART_RE = /^\s*(the|a|an|le|la|les|el|los|las|il|der|die|das)(?![\p{L}\p{N}'\u2019])/iu;
-  const REST_OK = /^(?:$|\s*[:;.,(\[{\p{Pd}\u2212])/u;
-  // Returns the title with the article moved, or null when the title has no movable ", The" (shortest head first).
+  const REST_OK = /^(?:$|\s*[:;.,(\[{\/!?\p{Pd}\u2212\u2122\u00ae\u00a9])/u;
+  // Returns the title with the article moved, or null when the title has no movable ", The" (shortest head first). Invisible
+  // format characters (zero-width space, LRM/RLM) are dropped from a moved title; stray commas before the article too.
   function moveArticle(text) {
-    const t = String(text ?? '').replace(/\s+/g, ' ').trim();
+    const t = String(text ?? '').replace(/\p{Cf}/gu, '').replace(/\s+/g, ' ').trim();
     for (let ci = t.indexOf(','); ci !== -1; ci = t.indexOf(',', ci + 1)) {
-      const head = t.slice(0, ci).trimEnd();
+      const head = t.slice(0, ci).replace(/[\s,]+$/, '');
       if (!head) continue;
       const m = ART_RE.exec(t.slice(ci + 1));
       if (!m) continue;
@@ -166,9 +178,13 @@
   }
 
   // (g7) multi-line paste: non-empty trimmed lines ([] for blank text, [line] for one line). search() itself never splits.
+  // U+000B/U+000C are PowerPoint/Office line breaks. In a list of 2+ lines, a leading list marker ("1.", "2)", "(3)", "-", "•")
+  // is not part of the title and is dropped.
+  const LIST_MARK = /^(?:\(?\d{1,3}[.)]|[-*\u2022\u00b7\u2023\u25e6\u25aa\u2013\u2014])\s+(?=\S)/u;
   function splitLines(text) {
-    return String(text ?? '').split(/\r\n|[\r\n\u0085\u2028\u2029]/)
+    const lines = String(text ?? '').split(/\r\n|[\r\n\u000b\u000c\u0085\u2028\u2029]/)
       .map(l => l.replace(/\p{Cf}/gu, '').trim()).filter(l => /[\p{L}\p{N}]/u.test(l));
+    return lines.length >= 2 ? lines.map(l => l.replace(LIST_MARK, '')) : lines;
   }
 
   // ---------- (b) tokenizer and alternate forms ----------
@@ -249,14 +265,15 @@
     if (two && (!c || c.v !== two.v)) vals.push(String(two.v));
     return { vals, ord: !!(c && c.ord), two };
   }
-  // Run-together number words: twentyone -> 21, nineteeneightyfour -> 1984 (tenfour reads as nothing).
-  const NUM_PARTS = Object.keys(NUMW).concat(Object.keys(ORDS)).sort((a, b) => b.length - a.length);
+  // Run-together number words: twentyone -> 21, nineteeneightyfour -> 1984, ninteeneightyfour (misspelt parts too) -> 1984
+  // (tenfour reads as nothing).
+  const NUM_PARTS = Object.keys(NUMW).concat(Object.keys(ORDS), Object.keys(MISSPELL)).sort((a, b) => b.length - a.length);
   const RUN_TOGETHER = new RegExp('^(?:' + NUM_PARTS.join('|') + '){2,}$');
   function runTogether(t) {
     if (t.length < 6 || !RUN_TOGETHER.test(t)) return null;
     const split = (i, out) => {
       if (i === t.length) return out.length >= 2 ? readRun(out) : null;
-      for (const p of NUM_PARTS) if (t.startsWith(p, i)) { const r = split(i + p.length, out.concat(p)); if (r) return r; }
+      for (const p of NUM_PARTS) if (t.startsWith(p, i)) { const r = split(i + p.length, out.concat(MISSPELL[p] || p)); if (r) return r; }
       return null;
     };
     const r = split(0, []);
@@ -282,6 +299,7 @@
         continue;
       }
       const x = mkWord(w, s, e, brk, chunk);
+      x.dot = text[e] === '.';
       if (raw !== w) {                                                                   // (b4) aaron's -> aarons + aaron; l'engle -> engle
         if (/'s$/.test(raw)) addAlt(x, raw.slice(0, -2).replace(/'/g, ''), K_ALT);
         const el = /^[odl]'(.+)$/.exec(raw);
@@ -289,16 +307,19 @@
       }
       W.push(x);
     }
-    // (b5) FIX F8: 2+ single letters (not "a") separated only by spaces or periods are ONE initials word: R.L. / R. L. / r l -> rl
+    // (b5) FIX F8: 2+ single letters separated only by spaces or periods are ONE initials word: R.L. / R. L. / r l -> rl.
+    // "a" is an initial only when a period follows it or joins it to the letter before (A.I., U.S.A., A. A. Milne); a
+    // space-separated "a" stays the small word.
     const size = {};
     for (const x of W) size[x.ch] = (size[x.ch] || 0) + 1;
-    const isInit = x => x.w.length === 1 && x.letters && x.w !== 'a' && size[x.ch] === 1;
+    const single = x => x.w.length === 1 && x.letters && size[x.ch] === 1;
+    const isInit = i => single(W[i]) && (W[i].w !== 'a' || W[i].dot || (i > 0 && single(W[i - 1]) && W[i].brk.includes('.')));
     const merged = [];
     for (let i = 0; i < W.length; i++) {
-      if (isInit(W[i]) && i + 1 < W.length && isInit(W[i + 1]) && /^[\s.]+$/.test(W[i + 1].brk)) {
+      if (isInit(i) && i + 1 < W.length && isInit(i + 1) && /^[\s.]+$/.test(W[i + 1].brk)) {
         let j = i;
         const letters = [W[i].w];
-        while (j + 1 < W.length && isInit(W[j + 1]) && /^[\s.]+$/.test(W[j + 1].brk)) letters.push(W[++j].w);
+        while (j + 1 < W.length && isInit(j + 1) && /^[\s.]+$/.test(W[j + 1].brk)) letters.push(W[++j].w);
         const x = mkWord(letters.join(''), W[i].s, W[j].e, W[i].brk, W[i].ch);
         x.initials = letters;
         merged.push(x);
@@ -349,7 +370,8 @@
         break;
       }
     }
-    // (b6) FIX F7 label + number pairs -> '#book3', '#grade8' (pair namespace); (b6r) ranges "Books 4–6" -> #book4..#book6
+    // (b6) FIX F7 label + number pairs -> '#book3', '#grade8' (pair namespace); (b6r) ranges "Books 4–6", "Volumes I–III" ->
+    // #book4..#book6; lists "Books 1 & 2", "Volumes 1, 2 and 3", "Parts One and Two" -> a pair term for each number
     W.pairs = [];
     for (let i = 0; i < W.length; i++) {
       const x = W[i];
@@ -360,10 +382,22 @@
       if (n) {
         let end = n.end, rng = null;
         const k = end + 1;
-        if (k < W.length && !n.roman) {
+        if (k < W.length) {
           const to = /^(?:to|through|thru)$/.test(W[k].w);
           const mm = DASH_SP.test(W[k].brk) ? pairNumber(W, k, key) : to ? pairNumber(W, k + 1, key) : null;
-          if (mm && !mm.roman && mm.v > n.v) { rng = { n: n.v, m: mm.v, k: !!n.k }; end = mm.end; }
+          if (mm && !mm.roman === !n.roman && mm.v > n.v) { rng = { n: n.v, m: mm.v, k: !!n.k }; end = mm.end; }
+        }
+        if (!rng) {
+          const list = [n.v];
+          for (let e = end; e + 1 < W.length;) {
+            const y = W[e + 1];
+            const nx = y.w === 'and' ? pairNumber(W, e + 2, key) : /^\s*[,\/+]\s*$/.test(y.brk) ? pairNumber(W, e + 1, key) : null;
+            if (!nx || !nx.roman !== !n.roman || nx.v <= list[list.length - 1]) break;
+            list.push(nx.v);
+            end = e = nx.end;
+            if (nx.roman) addAlt(W[nx.end], String(nx.v), K_ALT, true, true);
+          }
+          if (list.length > 1) rng = { n: list[0], m: list[list.length - 1], k: !!n.k, list };
         }
         addPair(W, key, n.v, i, i, end, rng, n);
         i = end;
@@ -374,7 +408,7 @@
         i++;
         continue;
       }
-      if (x.digits && !x.run && /#\s*$/.test(x.brk)) addPair(W, 'book', +x.num, -1, i, i, null, null);   // "#3"
+      if (x.digits && !x.run && +x.num < 100 && /#\s*$/.test(x.brk)) addPair(W, 'book', +x.num, -1, i, i, null, null);   // "#3"
     }
     // (b11) 9/11 -> 911 (the only digit join)
     for (let i = 0; i + 1 < W.length; i++)
@@ -395,11 +429,13 @@
     }
     return W;
   }
+  // The number after a label. 100 and over is never a volume, grade or unit ("book 1984", "#451", "year 2023-2024"): the label stays a
+  // word and the number a title word or year.
   function pairNumber(W, j, key) {
     const y = W[j];
     if (!y || y.pair || y.initials) return null;
-    if (y.run) return y.run.i === j ? { v: +y.run.vals[0], end: y.run.j } : null;
-    if (y.num !== null && !y.ord) return { v: +y.num, end: j };
+    if (y.run) return y.run.i === j && +y.run.vals[0] < 100 ? { v: +y.run.vals[0], end: y.run.j } : null;
+    if (y.num !== null && !y.ord) return +y.num < 100 ? { v: +y.num, end: j } : null;
     const r = y.letters ? romanValue(y.w) : 0;
     if (r >= 1 && r <= 30) return { v: r, end: j, roman: true };                            // Volume II, Class VIII, Part I
     if (key === 'grade' && (y.w === 'k' || y.w === 'kg')) return { v: 0, end: j, k: true };  // Grade K = grade 0
@@ -408,6 +444,7 @@
   function addPair(W, key, v, li, a, b, rng, n) {
     const p = { key, v, li, a, b, rng, terms: [] };
     if (!rng) p.terms.push('#' + key + v);
+    else if (rng.list) for (const k of rng.list) p.terms.push('#' + key + k);
     else if (rng.m - rng.n <= 19) for (let k = rng.n; k <= rng.m; k++) p.terms.push('#' + key + k);
     else p.terms.push('#' + key + rng.n, '#' + key + rng.m);
     for (let k = a; k <= b; k++) W[k].pair = p;
@@ -421,11 +458,31 @@
   function check10(b9) { let s = 0; for (let i = 0; i < 9; i++) s += +b9[i] * (10 - i); const c = (11 - (s % 11)) % 11; return b9 + (c === 10 ? 'x' : c); }
   const isbnPrefixForms = d => (d.length === 10 ? [d, check13('978' + d.slice(0, 9))] : d.startsWith('978') ? [d, check10(d.slice(3, 12))] : [d]);
   const completeIsbn = d => /^\d{9}[\dx]$/.test(d) || /^97[89]\d{10}$/.test(d);
+  // Digit groups joined by single hyphens or spaces, each complete ISBN in them (a 13-digit 978/979 one before an ISBN-10 that
+  // starts it): "978-0-374-37152-4 (pbk.)", "9780062498533 9780062498540". add(digits, start, end) gets each one.
+  function isbnScan(t, off, add) {
+    const g = [...t.matchAll(/\d+(?:x(?![a-z]))?|(?<=\d[ -])x(?![a-z])/gi)];
+    for (let i = 0; i < g.length;) {
+      let d = '', pick = -1, pd = '';
+      for (let j = i; j < g.length; j++) {
+        if (j > i && !/^[ -]$/.test(t.slice(g[j - 1].index + g[j - 1][0].length, g[j].index))) break;
+        d += g[j][0].toLowerCase();
+        if (d.length > 13) break;
+        if (/^97[89]\d{10}$/.test(d)) { pick = j; pd = d; break; }
+        if (/^\d{9}[\dx]$/.test(d)) { pick = j; pd = d; }
+      }
+      if (pick < 0) { i++; continue; }
+      add(pd, off + g[i].index, off + g[pick].index + g[pick][0].length);
+      i = pick + 1;
+    }
+  }
   // Every ISBN-shaped run in a cell with its [start, end) in the cell. Scientific notation ("9.79889E+12") has lost its
-  // digits and gives nothing; placeholders (N/A, -, none…) give nothing; a bad checksum is never rejected.
+  // digits and gives nothing; placeholders (N/A, -, none…) give nothing; a bad checksum is never rejected. Every dash counts as
+  // a hyphen, and a number formatted with digit-group commas ("9,781,400,033,416") is one number.
   function isbnRuns(value) {
-    const cell = String(value ?? '');
+    let cell = String(value ?? '').replace(/[\p{Pd}\u2212]/gu, '-');                          // same length: positions hold
     if (!/\d/.test(cell) || /^\s*[\d.]+e[+-]?\d+\s*$/i.test(cell)) return [];
+    if (/^\s*\d{1,3}(?:,\d{3}){2,}\s*$/.test(cell)) cell = cell.replace(/,/g, '-');
     const text = cell.replace(/\bisbn(?:[\s-]*1[03])?\s*[:#]?/gi, m => ' '.repeat(m.length));
     const out = [], cuts = [];
     const add = (d, s, e) => {
@@ -440,11 +497,9 @@
     for (const [a, b] of cuts) {
       const piece = text.slice(a, b), t = piece.trim();
       if (!/\d/.test(t)) continue;
-      const off = a + piece.indexOf(t);
-      if (/^[\d\s-]+[xX]?$/.test(t)) { add(t.replace(/[\s-]/g, ''), off, off + t.length); continue; }
-      const re = /\d{9,13}[xX]?/g;
-      let r;
-      while ((r = re.exec(t))) add(r[0], off + r.index, off + r.index + r[0].length);
+      const off = a + piece.indexOf(t), d = t.replace(/[\s-]/g, '');
+      if (/^[\d\s-]+[xX]?$/.test(t) && (d.length === 9 || d.length === 10 || d.length === 13)) { add(d, off, off + t.length); continue; }
+      isbnScan(t, off, add);
     }
     return out;
   }
@@ -473,7 +528,8 @@
       if (x.skip || (meta && !HAS_L.test(x.w))) return;
       const s = S(x), e = E(x), paired = !!x.pair;
       post(ix, x.w, r, f, K_EXACT, s, e, i, i, paired, 0);
-      for (const [t, k, why, num] of x.alts) if (!(num && (meta || x.run))) post(ix, t, r, f, k, s, e, i, i, paired, why);
+      // numeric alternates: not in Type/Banned By, not on run words (the run posts its value), no Roman numerals in names ("Xi")
+      for (const [t, k, why, num] of x.alts) if (!(num && (meta || x.run || (f === F_A && x.roman)))) post(ix, t, r, f, k, s, e, i, i, paired, why);
       if (!meta && !ix.spell.has(x.w)) ix.spell.set(x.w, text.slice(s, e));
       if (!meta && canFuzzy(x)) fuzzy.add(x.w);
       if (LABELS[x.w] && !meta) { doc.labelKeys.add(LABELS[x.w]); if (!paired) doc.unpairedLabels.add(LABELS[x.w]); }
@@ -513,14 +569,16 @@
   function seriesMarkers(W) {                                                              // (e5d) whole-series wording in a title
     const out = new Set(), w = i => (W[i] ? W[i].w : '');
     for (let i = 0; i < W.length; i++) {
-      if (w(i) === 'series' && w(i + 1) !== 'of') out.add(i);
+      if (w(i) === 'series' && w(i + 1) !== 'of' && !W[i].pair) out.add(i);                 // not "Doctor Who Series 3" (one season)
       if (/^(?:collection|boxset|trilogy|omnibus)$/.test(w(i))) out.add(i);
       if ((w(i) === 'all' && /^(?:titles|books|works)$/.test(w(i + 1))) || (w(i) === 'complete' && /^(?:works|series)$/.test(w(i + 1))) ||
           (/^box(?:ed)?$/.test(w(i)) && w(i + 1) === 'set')) { out.add(i); out.add(i + 1); }
     }
     return out;
   }
-  // Surnames for the authorHasOthers hint (c7): split names on ; / & and, commas when every part has 2+ words.
+  // Surnames (c7: the authorHasOthers hint, series lifts, short surnames): split names on ; / & and. A comma is "Last, Given"
+  // ("Rowling, J. K.", "King, Martin Luther") unless every comma part is a full name of 2+ words that are not initials
+  // ("Jack Canfield, Mark Victor Hansen").
   function surnamesOf(author) {
     const a = String(author ?? '').replace(/\([^)]*\)|\[[^\]]*\]/g, ' ').replace(/\bet\.?\s*al\b\.?/gi, ' ').replace(/(?:and|&)\s+others\s*$/i, ' ');
     const out = [];
@@ -531,9 +589,9 @@
     for (const name of a.split(/\s*(?:;|\/|&|\band\b)\s*/i)) {
       const parts = name.split(',').map(t => t.trim()).filter(Boolean);
       if (!parts.length) continue;
-      if (parts.length > 1 && parts.every(p => p.split(/\s+/).length >= 2)) parts.forEach(lastWord);
-      else if (parts.length === 2 && parts[1].split(/\s+/).length === 1) lastWord(parts[0]);
-      else lastWord(parts.join(' '));
+      const full = p => p.split(/\s+/).filter(t => bare(t).length >= 2 && !ROLE.has(bare(t))).length >= 2;
+      if (parts.length > 1 && parts.every(full)) parts.forEach(lastWord);
+      else lastWord(parts[0]);
     }
     return out;
   }
@@ -547,14 +605,15 @@
     const residue = RESIDUE_RE.exec(display);
     indexField(ix, doc, F_T, residue ? display.slice(0, residue.index) : display, fuzzy);
     const author = String(row.author ?? '');
-    const placeholder = PLACEHOLDER.has(bare(author)) || !bare(author);                  // (c4) N/A, Unknown, - … index nothing
+    // (c4) N/A, Unknown, Various Artists, Author Unknown, - … index nothing (role words aside: "Anonymous Author" = anonymous)
+    const placeholder = !bare(author) || PLACEHOLDER.has(bare(author)) || PLACEHOLDER.has(analyze(fold(author)).filter(x => !ROLE.has(x.w)).map(x => x.w).join(''));
     if (!placeholder) indexField(ix, doc, F_A, author, fuzzy);
     if (doc.etAl) ix.hasEtAl = true;
     if (String(row.memo ?? '')) indexField(ix, doc, F_M, String(row.memo), fuzzy);
     if (String(row.type ?? '')) indexField(ix, doc, F_Y, String(row.type), fuzzy);           // FIX F2: Type / Banned By only complete
     if (String(row.bannedBy ?? '')) indexField(ix, doc, F_B, String(row.bannedBy), fuzzy);  //         a match; Year is never indexed
     // ISBNs (c5): separate index, never in the word vocabulary
-    const raw = String(row.isbnRaw ?? '');
+    const raw = /^(?:\d{9}|\d{9}[\dXx]|\d{13})$/.test(String(row.isbnRaw ?? '')) ? String(row.isbnRaw) : '';   // exact raw digits only when they are one ISBN
     doc.isbn = raw ? isbnRuns(raw).map(x => Object.assign(x, { s: 0, e: String(row.isbn ?? '').length })) : isbnRuns(row.isbn);
     for (const x of doc.isbn) {
       if (!ix.isbnKeys.has(x.key)) ix.isbnKeys.set(x.key, []);
@@ -589,14 +648,14 @@
     if (gtk) { if (!ix.titleKeyRows.has(gtk)) ix.titleKeyRows.set(gtk, []); ix.titleKeyRows.get(gtk).push(r); }
     for (const p of TW.pairs) {
       const label = p.li >= 0 ? T.text.slice(S(TW[p.li]), E(TW[p.li])) : '';
-      if (p.rng) {
+      if (p.rng && !p.rng.list) {                                                        // a list names its volumes itself
         const L = label ? label[0].toUpperCase() + label.slice(1) : 'Books';
         doc.notes.push(`Covers ${L} ${p.rng.k ? 'K' : p.rng.n}\u2013${p.rng.m}`);
       }
     }
-    if (bookVals.size === 1 && !anyRange && !doc.series) {                                // (g2) single-volume note
-      const p = TW.pairs.find(q => q.key === 'book');
-      const L = p.li >= 0 && /^vol(?:ume)?s?$/.test(TW[p.li].w) ? 'Volume' : 'Book';
+    if (bookVals.size === 1 && !anyRange && !doc.series) {                                // (g2) single-volume note, in the title's own
+      const p = TW.pairs.find(q => q.key === 'book'), lw = p.li >= 0 ? TW[p.li].w : '';  //      label ("Symphony No. 9" -> "No. 9")
+      const L = /^vol(?:ume)?s?$/.test(lw) ? 'Volume' : /^(?:no|nos|num|number)$/.test(lw) ? 'No.' : 'Book';
       doc.notes.push(`This listing names ${L} ${p.v} only.`);
     }
     if (doc.series) doc.notes.push('Covers a whole series');
@@ -609,10 +668,39 @@
     AW.forEach((x, i) => {
       if (!x.skip && !x.initials && x.w.length >= 3 && HAS_L.test(x.w) && !ROLE.has(x.w) && !PUBLISHER.has(x.w) && !FORMAT.has(x.w) && !SMALL.has(x.w)) doc.authorWordIdx.add(i);
     });
-    doc.groupKey = (gtk || '\u0000' + r) + '|' + doc.authorKey;
+    // group key (f3): title words with numbers as values, so "Seven Habits…" groups with "7 Habits…"
+    const canon = [];
+    for (let i = 0; i < TW.length; i++) {
+      const x = TW[i];
+      if (x.run && x.run.i === i) { canon.push(x.run.vals[0]); i = x.run.j; }
+      else if (!SMALL.has(x.w)) canon.push(x.num !== null ? x.num : x.roman ? String(x.roman) : x.w);
+    }
+    // the people in the cell (word indices), split like surnamesOf; and the surname words (e3 initials, e5d series lift)
+    doc.persons = [];
+    let cur = [];
+    const people = [];
+    AW.forEach((x, i) => {
+      if (x.skip) return;
+      if (x.w === 'and') { if (cur.length) people.push(cur); cur = []; return; }
+      if (/[;\/]/.test(x.brk) && cur.length) { people.push(cur); cur = []; }
+      cur.push(i);
+    });
+    if (cur.length) people.push(cur);
+    for (const g of people) {
+      const parts = [[]];
+      for (const i of g) { if (parts[parts.length - 1].length && AW[i].brk.includes(',')) parts.push([]); parts[parts.length - 1].push(i); }
+      const full = p => p.filter(i => !AW[i].initials && AW[i].w.length >= 2 && !ROLE.has(AW[i].w)).length >= 2;
+      if (parts.length > 1 && parts.every(full)) doc.persons.push(...parts); else doc.persons.push(g);
+    }
+    const surnames = doc.authorless ? [] : surnamesOf(author), sns = new Set(surnames.map(bare));
+    doc.surnameIdx = new Set();
+    AW.forEach((x, i) => { if (!x.skip && sns.has(x.w)) doc.surnameIdx.add(i); });
+    doc.groupKey = (canon.join(' ') || gtk || '\u0000' + r) + '|' + doc.authorKey;
+    if (!ix.groupRows.has(doc.groupKey)) ix.groupRows.set(doc.groupKey, []);
+    ix.groupRows.get(doc.groupKey).push(r);
     if (!doc.authorless) {
       const shown = author.trim().replace(/[\s,]*(?:et\.?\s*al\.?|(?:and|&)\s+others)\s*$/i, '').trim();
-      for (const sn of surnamesOf(author)) {
+      for (const sn of surnames) {
         const k = bare(sn);
         if (!k) continue;
         if (!ix.surnames.has(k)) ix.surnames.set(k, []);
@@ -637,7 +725,7 @@
 
   function buildIndex(rows, opts = {}) {
     const ix = { rows: Array.isArray(rows) ? rows : [], docs: [], terms: new Map(), sorted: null, fuzzy: [], isbnKeys: new Map(),
-      isbnForms: [], titleKeyRows: new Map(), pairKeyRows: new Map(), surnames: new Map(), spell: new Map(), hasEtAl: false,
+      isbnForms: [], titleKeyRows: new Map(), groupRows: new Map(), pairKeyRows: new Map(), surnames: new Map(), spell: new Map(), hasEtAl: false,
       rowCount: 0, isbnRowCount: 0, aliases: parseAliases(opts && opts.aliases) };
     const fuzzy = new Set();
     ix.rows.forEach((row, r) => indexRow(ix, row || {}, r, fuzzy));
@@ -649,11 +737,11 @@
   }
 
   // ---------- (b12) query-only alternates: plural/singular, British/American, abbreviations ----------
-  const IRREGULAR = { woman: 'women', man: 'men', child: 'children', mouse: 'mice', person: 'people', foot: 'feet', tooth: 'teeth', goose: 'geese' };
-  const BRIT = { pyjamas: 'pajamas', pyjama: 'pajama', grey: 'gray', mum: 'mom', mummy: 'mommy', aeroplane: 'airplane', programme: 'program',
+  const IRREGULAR = table({ woman: 'women', man: 'men', child: 'children', mouse: 'mice', person: 'people', foot: 'feet', tooth: 'teeth', goose: 'geese' });
+  const BRIT = table({ pyjamas: 'pajamas', pyjama: 'pajama', grey: 'gray', mum: 'mom', mummy: 'mommy', aeroplane: 'airplane', programme: 'program',
     catalogue: 'catalog', dialogue: 'dialog', jewellery: 'jewelry', defence: 'defense', licence: 'license', plough: 'plow', tyre: 'tire',
-    moustache: 'mustache', mould: 'mold', sceptic: 'skeptic', aluminium: 'aluminum', cosy: 'cozy', travelled: 'traveled', traveller: 'traveler' };
-  const ABBR = { mr: 'mister', dr: 'doctor', st: 'saint', mt: 'mount' };
+    moustache: 'mustache', mould: 'mold', sceptic: 'skeptic', aluminium: 'aluminum', cosy: 'cozy', travelled: 'traveled', traveller: 'traveler' });
+  const ABBR = table({ mr: 'mister', dr: 'doctor', st: 'saint', mt: 'mount' });
   const twoWay = o => { for (const [a, b] of Object.entries(o)) o[b] = a; return o; };
   twoWay(IRREGULAR); twoWay(BRIT); twoWay(ABBR);
   function pluralForms(w) {                                                                // SPV-4 (Title and Memo only), FIX F13
@@ -663,11 +751,13 @@
     else if (/ves$/.test(w)) out.push(w.slice(0, -3) + 'f', w.slice(0, -3) + 'fe', w.slice(0, -1));
     else if (/(?:s|x|z|ch|sh)es$/.test(w)) out.push(w.slice(0, -2));
     else if (/s$/.test(w) && !/(?:ss|us|is)$/.test(w)) out.push(w.slice(0, -1));
+    if (/[^aeiou]oes$/.test(w) && w.length >= 6) out.push(w.slice(0, -2));                   // heroes -> hero, tomatoes -> tomato
     if (/[^aeiou]y$/.test(w)) out.push(w.slice(0, -1) + 'ies');
     else if (/fe$/.test(w)) out.push(w.slice(0, -2) + 'ves');
     else if (/f$/.test(w)) out.push(w.slice(0, -1) + 'ves');
     else if (/(?:s|x|z|ch|sh)$/.test(w)) out.push(w + 'es');
     else out.push(w + 's');
+    if (/[^aeiou]o$/.test(w)) out.push(w + 'es');                                            // hero -> heroes, echo -> echoes
     return out;
   }
   function britAm(w) {                                                                     // SPV-5
@@ -697,7 +787,8 @@
     /\b\d{1,2}\/\d{1,2}\/(?:\d{4}|\d{2})\b/g, /\b\d{4}-\d{1,2}-\d{1,2}\b/g, /\(\s*\d{4}\s*\)/g,
     /\b\d(?:\.\d)?\s+out\s+of\s+5\s+stars?\b/g, /\b\d\.\d\s*\/\s*5\b/g, /\b\d(?:\.\d)?\s+stars?\b/g,
     /\(\s*\d+\s+ratings?\s*\)/g, /\b\d+\s+(?:ratings?|reviews?)\b/g, /\bavg\.?\s+rating\s+\d(?:\.\d+)?\b/g,
-    /\((?:author|illustrator|editor|translator|narrator|foreword|introduction|contributor)s?\)/g,
+    /\((?:goodreads\s+)?(?:author|illustrator|editor|translator|narrator|foreword|introduction|contributor)s?\)/g,
+    /(?<=,\s*)(?:1[5-9]|20)\d\d\s*-(?!\s*\d)/g,                                                // a catalogue heading's open life dates: "Stine, R. L., 1943-"
   ];
   const ISBN_LABEL = /\bisbn(?:[\s-]*1[03])?\s*[:#]?/g;
   const ALL_F = 63, TAM = 7, TM = 5, CONTENT_F = 15;                                        // field masks (bit = 1 << field)
@@ -708,15 +799,18 @@
 
   // Pulls ISBNs out of the folded query (d7). Returns the text with ISBN spans blanked (\u0001 marks a removed span).
   function extractIsbns(q, Q) {
-    const lab = q.replace(ISBN_LABEL, m => '\u0002' + ' '.repeat(m.length - 1));
+    const lab = q.replace(/[\p{Pd}\u2212]/gu, '-').replace(ISBN_LABEL, m => '\u0002' + ' '.repeat(m.length - 1));   // every dash is a hyphen
     const rest = lab.replace(/[\u0001\u0002]/g, ' ').trim();
-    const nDigits = (rest.match(/\d/g) || []).length;
-    if (/^[\d\s-]+x?$/.test(rest) && nDigits >= 6 && !/^(?:19|20)\d\d\s*(?:-\s*(?:\d\d|(?:19|20)\d\d)|\s(?:19|20)\d\d)$/.test(rest)) {
+    const nDigits = (rest.match(/\d/g) || []).length, joined = rest.replace(/[\s-]/g, '');
+    // the whole query is one ISBN (or its start): one group, or groups after a label, starting 978/979, or making a complete
+    // ISBN without a year; never more than 13 characters (two ISBNs, an ISBN and a year range, "101 451" go to the mixed path)
+    if (/^[\d\s-]+x?$/.test(rest) && nDigits >= 6 && joined.length <= 13 && !/^(?:19|20)\d\d\s*(?:[-\/]\s*(?:\d{0,3}|(?:19|20)\d\d)|\s(?:19|20)\d\d)$/.test(rest)) {
       const groups = rest.split(/\s+/);
-      if (groups.length === 1 || lab.includes('\u0002') || /^97[89]/.test(groups[0]) || !rest.split(/[\s-]+/).some(isYearTok)) {
-        Q.isbnQuery = true;                                                                  // the whole query is one ISBN (or its start)
-        Q.digits = rest.replace(/[\s-]/g, '');
+      if (groups.length === 1 || lab.includes('\u0002') || /^97[89]/.test(groups[0]) || (completeIsbn(joined) && !rest.split(/[\s-]+/).some(isYearTok))) {
+        Q.isbnQuery = true;
+        Q.digits = joined;
         if (completeIsbn(Q.digits)) Q.isbn.push({ kind: 'isbn', key: isbnKey(Q.digits), d: Q.digits, text: Q.digits });
+        else if (/^\d{9}$/.test(Q.digits)) Q.isbn.push({ kind: 'isbn', key: isbnKey('0' + Q.digits), d: '0' + Q.digits, text: Q.digits });   // lost leading 0
         return '';
       }
     }
@@ -742,7 +836,8 @@
       if (/^\d+-\d+-\d+-[\dx]$/.test(t) || /^\d+-\d+-\d+-\d+-\d$/.test(t)) {               // hyphenated ISBN shape
         const j = t.replace(/-/g, ''), n = t.split('-').length;
         if ((n === 4 && /^\d{9}[\dx]$/.test(j)) || (n === 5 && /^97[89]\d{10}$/.test(j))) d = j;
-      } else if (completeIsbn(t)) d = t;                                                    // unbroken 10-char or 978/979 13-digit token
+      } else if (/^97[89][\d-]*\d$/.test(t) && /^97[89]\d{10}$/.test(t.replace(/-/g, ''))) d = t.replace(/-/g, '');   // 978-0306406157
+      else if (completeIsbn(t)) d = t;                                                      // unbroken 10-char or 978/979 13-digit token
       if (d) { add(d, i, i); continue; }
       if (/^97[89]\d*$/.test(t)) {                                                           // spaced groups starting 978/979, exactly 13 digits
         let j = i, s = '';
@@ -763,7 +858,7 @@
     let q = folded;
     for (const re of REMOVED_SPANS) q = q.replace(re, ' \u0001 ');
     if (!/[\p{L}\p{N}]/u.test(q)) q = folded;                                               // never remove everything
-    const Q = { folded, units: [], req: [], fmt: [], isbn: [], years: [], etal: null, chunks: [], joins: [], isbnQuery: false,
+    const Q = { folded, units: [], req: [], fmt: [], isbn: [], years: [], etal: null, chunks: [], joins: [], tails: [], isbnQuery: false,
       digits: '', hasCompleteIsbn: false, state: 'ok', stopKey: null, W: [] };
     const t2 = extractIsbns(q, Q);
     Q.text = t2;
@@ -782,7 +877,9 @@
     }
     const W = Q.W = analyze(t2);
     const last = W.length - 1;
-    const lastIdx = unfinishedIn && moved === null && last >= 0 && !t2.slice(W[last].e).includes('\u0001') ? last : -1;
+    // the last word is still being typed unless a moved article was the last word ("7th Knot, The"; not "Alchemist, The: A Fab")
+    const lastWord = t => { const m = fold(t).match(/[\p{L}\p{N}']+(?=[^\p{L}\p{N}']*$)/u); return m ? m[0] : ''; };
+    const lastIdx = unfinishedIn && (moved === null || lastWord(moved) === lastWord(text)) && last >= 0 && !t2.slice(W[last].e).includes('\u0001') ? last : -1;
     // (d6) year ranges: 2023-2024, 2023/24, 2023 to 2024, "2008 2009" -> one optional unit (a lone 1984 stays a word)
     for (let i = 0; i < W.length; i++) {
       const a = W[i], b = W[i + 1];
@@ -792,15 +889,22 @@
       else if (b.w === 'to' && isYearWord(W[i + 2])) { end = +W[i + 2].w; j = i + 2; }
       else if (b.brk === ' ' && isYearWord(b) && +b.w === +a.w + 1) end = +b.w;
       if (end >= +a.w) { Q.years.push(unit('year', i, j, { start: +a.w, end })); i = j; }
+      else if (unfinishedIn && i + 1 === last && b.digits && b.w.length <= 3 && (DASH_SP.test(b.brk) || /^\s*\/\s*$/.test(b.brk))) {
+        Q.years.push(unit('year', i, i + 1, { start: +a.w, end: null }));                  // "2023-202": a range still being typed
+        i++;
+      }
     }
+    const tail = W.length ? t2.slice(W[last].e) : '';                                      // "orwell 2023-": the same, before its end year
+    if (unfinishedIn && isYearWord(W[last]) && !W[last].unit && /^\s*[\/\p{Pd}\u2212]\s*$/u.test(tail)) Q.years.push(unit('year', last, last, { start: +W[last].w, end: null }));
     // "et al" and a trailing "and others": one optional unit
     for (let i = 0; i + 1 < W.length; i++) if (W[i].w === 'et' && W[i + 1].w === 'al' && !W[i].unit) Q.etal = unit('etal', i, i + 1);
     if (W.length >= 2 && W[last - 1].w === 'and' && W[last].w === 'others' && !W[last].unit) Q.etal = unit('etal', last - 1, last);
     for (const p of W.pairs) {                                                             // label pairs and ranges: one unit each
       if (W[p.a].unit || W[p.b].unit) continue;
       const terms = [];
-      if (p.rng) for (let k = p.rng.n; k <= Math.min(p.rng.m, p.rng.n + 200); k++) terms.push('#' + p.key + k);
-      unit('pair', p.a, p.b, { p, key: p.key, v: p.v, terms: p.rng ? terms : p.terms, soft: p.key === 'edition', format: p.key === 'edition' });
+      if (p.rng && !p.rng.list) for (let k = p.rng.n; k <= Math.min(p.rng.m, p.rng.n + 200); k++) terms.push('#' + p.key + k);
+      const u = unit('pair', p.a, p.b, { p, key: p.key, v: p.v, terms: p.rng && !p.rng.list ? terms : p.terms, soft: p.key === 'edition', format: p.key === 'edition' });
+      if (p.li < 0) u.text = '#' + u.text;                                                  // "#3" (the reason reads "#3 = Book 3")
     }
     for (const run of W.runs) if (!W[run.i].unit && !W[run.j].unit) unit('run', run.i, run.j, { run, last: run.j === lastIdx });
     W.forEach((x, i) => {                                                                   // edition statements are soft: "25th anniversary"
@@ -809,8 +913,11 @@
     W.forEach((x, i) => {
       if (x.unit) return;
       const u = unit('word', i, i, { w: x.w, x });
-      u.small = SMALL.has(x.w);
-      u.soft = !u.small && (FORMAT.has(x.w) || QUESTION.has(x.w) || ROLE.has(x.w) || PUBLISHER.has(x.w) || !!x.edition);
+      // a lone "n" between two words is the "and" of rock 'n' roll typed without apostrophes (fold reads 'n' as "and")
+      u.small = SMALL.has(x.w) || (x.w === 'n' && !x.initials && i > 0 && i < last && W[i - 1].w.length > 1 && W[i + 1].w.length > 1);
+      u.soft = !u.small && (FORMAT.has(x.w) || QUESTION.has(x.w) || ROLE.has(x.w) || PUBLISHER.has(x.w) || !!x.edition ||
+        (ASKING.has(x.w) && W.some(y => QUESTION.has(y.w))) ||
+        (/^years?$/.test(x.w) && !!W[i + 1] && !!W[i + 1].unit && W[i + 1].unit.kind === 'year'));       // "banned year 2023/24"
       u.format = FORMAT.has(x.w) || !!x.edition;
       u.short = isShortWord(x);
       u.partialIsbn = x.digits && x.w.length >= 9;
@@ -832,6 +939,34 @@
       u.prefix = u.a === lastIdx && x.w.length >= 3 && !SMALL.has(x.w);                     // (e1) unfinished last word, 3+ characters
       u.fuzzy = x.letters && !x.initials && !SMALL.has(x.w) && !isNumWord(x.nw) && !MISSPELL[x.w] && !u.short;
       u.last = u.a === lastIdx;
+      if (u.prefix && x.letters && !x.initials && !isNumWord(x.nw) && !MISSPELL[x.w]) {    // (e1) and the forms of the number words and
+        const pf = new Set();                                                                //      abbreviations it starts: sevent -> 7th, 7
+        for (const c of numCompletions(x.w, false)) for (const t of numForms(c)) pf.add(t);
+        for (const T of [ABBR, BRIT]) for (const k in T) if (k.length > x.w.length && k.startsWith(x.w)) pf.add(T[k]);
+        if (pf.size) u.pforms = [...pf];
+      }
+    }
+    // (e1, b8) number words before the word being typed: read them with each completion of it ("nineteen eig" -> 1918, 1980-1989;
+    // "twenty thousan" -> 20000; "four fif" -> 415, 450-459). The values satisfy every unit of those words.
+    const L = lastIdx > 0 ? W[lastIdx] : null;
+    const cs = L && L.letters && !L.initials && L.w.length >= 3 ? numCompletions(L.nw, true) : [];
+    if (cs.length) {
+      const tok = x => (x.digits ? x.num : x.nw);
+      let k = lastIdx;
+      while (k > 0 && lastIdx - k < 3 && (W[k].brk === ' ' || DASH1.test(W[k].brk)) && !W[k - 1].initials &&
+        (isNumWord(W[k - 1].nw) || (W[k - 1].digits && W[k - 1].w.length <= 3))) k--;
+      for (let s = k; s < lastIdx; s++) {
+        const prev = W.slice(s, lastIdx).map(tok), vals = new Set();
+        const read = ts => { const r = readRun(ts); if (r) for (const v of r.vals) { vals.add(v); if (r.ord) vals.add(v + 'th'); } };
+        for (const c of cs) {
+          read(prev.concat(c));
+          if (TENS[c] !== undefined) for (const n of ONE_TO_NINE) read(prev.concat(c, n));           // eighty -> eighty-one…
+        }
+        if (!vals.size) continue;
+        const units = [...new Set(W.slice(s, lastIdx + 1).map(x => x.unit))].filter(v => v && (v.kind === 'word' || v.kind === 'run') && v.req);
+        if (units.length) Q.tails.push({ units, forms: [...vals] });
+        break;
+      }
     }
     Q.req = Q.units.filter(u => u.req);
     Q.fmt = Q.units.filter(u => u.format && !u.req);
@@ -961,9 +1096,23 @@
         mergeInto(m, allOf(range(a, b).map(k => literal(ix, u, W[k], false, only))));
         return m;
       };
-      mergeInto(map, allOf([group(run.i, sp - 1, run.two.A), group(sp, run.j, run.two.B)], K_ALT));
+      const two = allOf([group(run.i, sp - 1, run.two.A), group(sp, run.j, run.two.B)], K_ALT);
+      for (const E of two.values()) for (const h of E.hits) if (h.why === 'eq') h.why = 'eq2';   // explained with both cell numbers (g1)
+      mergeInto(map, two);
     }
     mergeInto(map, allOf(range(run.i, run.j).map(k => literal(ix, u, W[k], u.last && k === run.j, only))));
+    if (u.last) {                                    // (e1) the run's last word is the start of a longer word: "sixty second" -> 60 + Seconds
+      const hw = range(run.i, run.j - 1).map(k => W[k]);
+      const head = hw.length > 1 ? readRun(hw.map(x => (x.digits ? x.num : x.nw))) : hw[0].num !== null && !hw[0].ord ? { vals: [hw[0].num] } : null;
+      if (head && !head.ord) {
+        const hm = new Map(), q = Q.text.slice(hw[0].s, hw[hw.length - 1].e);
+        lookupForms(ix, u, head.vals.map(v => [v, K_ALT, 1, ALL_F]), hm, only, true);
+        for (const E of hm.values()) for (const h of E.hits) h.q = q;
+        const pm = new Map();
+        lookupPrefix(ix, u, W[run.j].w, pm, only);
+        mergeInto(map, allOf([hm, pm]));
+      }
+    }
   }
   // (b6, e5e d) label pairs: the pair term; a label word and the number unpaired in the row; else "loose" (same label, other number)
   function lookupPair(ix, u, map, only) {
@@ -984,11 +1133,19 @@
       for (const dp of ix.docs[r].pairs) if (dp.key === u.key && (!vals || !vals.has(dp.v) || dp.rng)) addHit(map, { r, f: dp.f, k: K_LOOSE, s: dp.s, e: dp.e, wi: dp.wi, wj: dp.wj, why: 'lo', q: u.text, n: 0 });
     }
   }
+  // the completions of the word being typed (u.pforms, e1): prefix hits on the number or abbreviation the word starts
+  function lookupCompletions(ix, u, map, only) {
+    for (const t of u.pforms) for (const p of ix.terms.get(t) || []) {
+      if ((only && !only.has(p.r)) || p.f > F_M || p.k === K_COMP) continue;
+      addHit(map, mkHit(p, K_PREFIX, '', u.text, 0));
+    }
+  }
   function lookupUnit(ix, Q, u, only, map) {
     map = map || new Map();
     if (u.kind === 'word') {
       lookupForms(ix, u, u.forms, map, only, !u.req);                                       // optional words: exact / alternate only
       if (u.prefix) lookupPrefix(ix, u, u.w, map, only);
+      if (u.prefix && u.pforms) lookupCompletions(ix, u, map, only);
       if (u.fuzzy) lookupFuzzy(ix, u, map, only);
     } else if (u.kind === 'run') lookupRun(ix, Q, u, map, only);
     else if (u.kind === 'pair') lookupPair(ix, u, map, only);
@@ -1014,15 +1171,28 @@
     for (const j of Q.joins) {                                                             // (e1 ii) "super man" -> Superman
       const m = new Map();
       lookupForms(ix, j.u1, [[j.t, K_EXACT, 0, CONTENT_F]].concat(pluralForms(j.t).map(t => [t, K_ALT, 0, TM])), m, null, true);
+      if (j.u2.prefix) lookupPrefix(ix, j.u1, j.t, m, null);                                 // "sand cas" -> Sandcastle while typing
       for (const E of m.values()) for (const h of E.hits) if (h.f <= F_M) for (const u of [j.u1, j.u2]) addHit(u.map, Object.assign({}, h, { k: K_COMP, why: 'c1', q: j.u1.text + ' ' + j.u2.text }));
+    }
+    for (const t of Q.tails) {                                                              // (e1) number words ending in the word being typed
+      const m = new Map();
+      lookupForms(ix, t.units[0], t.forms.map(v => [v, K_ALT, 0, ALL_F]), m, null, true);
+      for (const E of m.values()) for (const h of E.hits) if (h.f <= F_M) for (const u of t.units) addHit(u.map, Object.assign({}, h, { k: K_PREFIX, why: '', n: 0, q: u.text }));
     }
     const cand = new Set();
     for (const u of Q.units.concat(Q.isbn)) if (u.req || u.format || u.kind === 'isbn') for (const [r, E] of u.map) if (E.c) cand.add(r);
     for (const u of Q.units) if (!u.req && !u.format && u.kind !== 'isbn' && u.kind !== 'year' && u.kind !== 'etal') lookupUnit(ix, Q, u, cand, u.map);
-    // (e4) author words; (e6) one-word demotion; (e5e) two-author segments
+    // (e4) author words: the name after a standalone "by" ("holes by louis sachar", up to the next small word), or a word with any
+    // hit in an Author field, a misspelt one too ("george orwel"); (e6) one-word demotion; (e5e) two-author segments
+    const byName = new Set();
+    Q.W.forEach((x, i) => { if (x.w === 'by') for (let k = i + 1; k < Q.W.length && !SMALL.has(Q.W[k].w); k++) byName.add(k); });
     for (const u of Q.req) {
-      u.authorWord = (u.a > 0 && Q.W[u.a - 1].w === 'by') || [...u.map.values()].some(E => E.hits.some(h => h.f === F_A && KIND_CLASS[h.k] === 3));
+      u.authorWord = byName.has(u.a) || [...u.map.values()].some(E => E.hits.some(h => h.f === F_A && h.k !== K_LOOSE));
     }
+    // (d9) role and publisher words are optional beside an author word, or when no title in the list has them; otherwise a row
+    // needs them like any title word ("mr. men" is not Spider-Man, "company of wolves" is not The Wolves of…)
+    Q.titled = Q.units.filter(u => u.kind === 'word' && u.soft && !u.req && (ROLE.has(u.w) || PUBLISHER.has(u.w)) && !FORMAT.has(u.w) &&
+      !QUESTION.has(u.w) && u.forms.some(([t]) => (ix.terms.get(t) || []).some(p => p.f === F_T)));
     Q.demote = null;
     if (Q.req.length === 1) {
       let strong = false, fz1 = false;
@@ -1035,30 +1205,84 @@
       const segs = [[]];
       for (const u of Q.ordered) {
         if (u.kind === 'word' && u.w === 'and') { segs.push([]); continue; }
-        if (Q.W[u.a].brk.includes('/') && segs[segs.length - 1].length) segs.push([]);
+        if (/[\/;]/.test(Q.W[u.a].brk) && segs[segs.length - 1].length) segs.push([]);
         if (u.req) segs[segs.length - 1].push(u);
       }
-      const s = segs.filter(x => x.length);
+      // a comma also splits when each side is a full name ("jack canfield, mark victor hansen"), not "canfield, j."
+      const byComma = seg => {
+        const parts = [[]];
+        for (const u of seg) { if (parts[parts.length - 1].length && Q.W[u.a].brk.includes(',')) parts.push([]); parts[parts.length - 1].push(u); }
+        return parts.length > 1 && parts.every(p => p.filter(u => !u.short).length >= 2) ? parts : [seg];
+      };
+      const s = segs.filter(x => x.length).flatMap(byComma);
       if (s.length >= 2 && s.every(x => x.length <= 4)) Q.segments = s;
     }
     for (const r of cand) { const res = judge(ix, Q, r); if (res) out.rows.set(r, res); }
     return out;
   }
 
-  // Short words and initials are optional for a row when the nearest non-SMALL query word beside them hit its Author (e3).
-  function besideAuthor(Q, u, r) {
+  // The non-SMALL query word beside u that hit the row's Author exactly, through an alternate or as a prefix (e3), or with any
+  // hit (a similar spelling too) when fuzzy is set.
+  function besideAuthor(Q, u, r, fuzzy) {
     const list = Q.ordered.filter(v => v === u || !v.small), i = list.indexOf(u);
     for (const v of [list[i - 1], list[i + 1]]) {
       const E = v && v.map && v.map.get(r);
-      if (E && E.hits.some(h => h.f === F_A)) return v;
+      if (E && E.hits.some(h => h.f === F_A && (fuzzy ? h.k !== K_LOOSE : KIND_CLASS[h.k] === 3))) return v;
     }
     return null;
   }
   const hitSpan = h => (h.wi <= h.wj ? [h.wi, h.wj] : [h.wj, h.wi]);
+  const isSubseq = (a, b) => { let i = 0; for (const ch of b) if (ch === a[i]) i++; return !!a && i === a.length; };
   function judge(ix, Q, r) {
     const doc = ix.docs[r], E = u => (u.map && u.map.get(r)) || null;
+    const A = doc.fw[F_A], AW = A ? A.W : [];
+    // author words the query hit exactly (e3): short words and initials are optional beside a matched author word, but only while
+    // the row has given names left for them to be ("the bfg roald dahl" is not Dahl's initials), and never a listed surname ("ng")
+    const usedA = new Set();
+    if (AW.length) for (const u of Q.units) {
+      const e = !u.small && E(u);
+      if (e) for (const h of e.hits) if (h.f === F_A && KIND_CLASS[h.k] === 3) { const [a, b] = hitSpan(h); for (let x = a; x <= b; x++) usedA.add(x); }
+    }
+    const givenLeft = AW.some((x, i) => !x.skip && !usedA.has(i) && !ROLE.has(x.w) && HAS_L.test(x.w));
+    // the first letters of the other given names of the person whose name the word nb hit ("Mark Victor Hansen" -> "mv")
+    const givenOf = nb => {
+      const near = new Set();
+      for (const h of nb.map.get(r).hits) if (h.f === F_A) { const [a, b] = hitSpan(h); for (let x = a; x <= b; x++) near.add(x); }
+      const person = doc.persons.find(p => p.some(i => near.has(i))) || [];
+      return person.filter(i => !usedA.has(i) && !near.has(i) && !ROLE.has(AW[i].w) && HAS_L.test(AW[i].w)).map(i => (AW[i].initials || [AW[i].w[0]]).join('')).join('');
+    };
+    const typedInitials = u => (u.x.initials || [u.w]).join('');
     const req = [], exempt = [];
-    for (const u of Q.req) { const nb = u.short ? besideAuthor(Q, u, r) : null; if (nb) exempt.push([u, nb]); else req.push(u); }
+    const typing = u => u.last && u.w.length <= 2;                // a 1-2 letter word still being typed ("lemony snicket b…")
+    for (const u of Q.req) {
+      let nb = null;
+      if (u.short && (givenLeft || typing(u)) && (u.x.initials || !ix.surnames.has(u.w))) {
+        nb = besideAuthor(Q, u, r);
+        if (!nb) {                                   // beside a similar spelling only when the letters agree ("melvin b" for Melvn Berger)
+          const fz = besideAuthor(Q, u, r, true);
+          if (fz && isSubseq(typedInitials(u), givenOf(fz))) nb = fz;
+        }
+      }
+      if (nb) exempt.push([u, nb]); else req.push(u);
+    }
+    for (const u of Q.titled) if (!besideAuthor(Q, u, r)) req.push(u);                       // (d9) role words used as title words
+    // typed given names whose first letters spell the row's initials, next to its matched surname: "robert lawrence stine" ->
+    // R.L. Stine (Close, explained)
+    let initialsWhy = '';
+    if (usedA.size && AW.some(x => x.initials)) {
+      const list = Q.ordered.filter(v => !v.small);
+      const miss = req.filter(u => u.kind === 'word' && !u.short && u.x.letters && !(E(u) && (E(u).c || E(u).m))).sort((a, b) => a.a - b.a);
+      const pos = miss.map(u => list.indexOf(u));
+      const nextTo = v => { const e = v && E(v); return !!e && e.hits.some(h => h.f === F_A && KIND_CLASS[h.k] === 3); };
+      if (miss.length && pos.every((p, k) => !k || p === pos[k - 1] + 1) && (nextTo(list[pos[0] - 1]) || nextTo(list[pos[pos.length - 1] + 1]))) {
+        const iw = AW.findIndex((x, i) => x.initials && !usedA.has(i) && isSubseq(miss.map(u => u.w[0]).join(''), x.initials.join('')));
+        if (iw >= 0) {
+          for (const u of miss) req.splice(req.indexOf(u), 1);
+          const end = A.st.b[AW[iw].e - 1];
+          initialsWhy = `${miss.map(u => u.text).join(' ')} = ${A.text.slice(A.st.a[AW[iw].s], A.text[end] === '.' ? end + 1 : end)}`;
+        }
+      }
+    }
     let gate = false, allHit = true, allExact = true, spelled = false, loose = false, anchors = 0;
     const unanchored = [];
     for (const u of req) {
@@ -1073,14 +1297,15 @@
     const isbnExact = Q.isbn.some(u => u.map && u.map.has(r)), R = req.length, why = [];
     // title words hit by any non-SMALL unit (e5c): word index -> matched exactly / through an alternate?
     const tHit = new Map();
-    let authorWordHit = false, authorWordExact = false;
+    let authorWordHit = false, surnameHit = false;
     for (const u of Q.units) {
       const e = !u.small && E(u);
       if (e) for (const h of e.hits) {
         if (h.k === K_LOOSE) continue;
         const [a, b] = hitSpan(h);
         if (h.f === F_T) for (let k = a; k <= b; k++) tHit.set(k, tHit.get(k) || isExactish(h.k));
-        if (h.f === F_A && KIND_CLASS[h.k] === 3 && doc.authorWordIdx.has(a)) { authorWordHit = true; if (isExactish(h.k)) authorWordExact = true; }
+        if (h.f === F_A && KIND_CLASS[h.k] === 3 && doc.authorWordIdx.has(a)) authorWordHit = true;
+        if (h.f === F_A && KIND_CLASS[h.k] === 3) for (let k = a; k <= b; k++) if (doc.surnameIdx.has(k)) surnameHit = true;
       }
     }
     const T = doc.items;
@@ -1095,8 +1320,11 @@
     else if (gate && R && allHit && !loose && spelled && !demoted) tier = 'close';          // (e5b)
     else if (titleInside) { tier = 'close'; why.push('the whole listed title is in your search'); }   // (e5c)
     if (doc.series) {                                                                      // (e5d) a row covering a whole series
-      const byName = T.length > 0 && T.every(it => it.wis.some(k => tHit.has(k)));
-      if (byName || authorWordExact) {
+      // lifted by its series name read as the reverse check reads a title (every word hit, one exactly; a one-word name also needs
+      // an author word), or by its author's surname (exactly, through an alternate or as a prefix; not a shared given name)
+      const byName = T.length > 0 && T.every(it => it.wis.some(k => tHit.has(k))) && T.some(it => it.wis.some(k => tHit.get(k))) &&
+        (T.length >= 2 || authorWordHit);
+      if (byName || surnameHit) {
         pinned = true;
         if (tier !== 'match') tier = 'close';
         why.unshift(`covers a whole series: its ${byName ? 'series name' : 'author'} is in your search`);
@@ -1104,14 +1332,21 @@
     }
     if (!tier) {                                                                           // (e5e) Possible
       let k = 0;
-      if (Q.segments) for (const seg of Q.segments) if (seg.every(u => { const e = E(u); return e && e.hits.some(h => h.f === F_A && KIND_CLASS[h.k] === 3); })) k++;
+      if (Q.segments) for (const seg of Q.segments) {                                     // initials in a segment are optional beside its name
+        const core = seg.filter(u => !u.short);
+        if (core.length && core.every(u => { const e = E(u); return e && e.hits.some(h => h.f === F_A && KIND_CLASS[h.k] === 3); })) k++;
+      }
       if (anchors >= 1 && doc.authorless && unanchored.length && unanchored.every(u => u.authorWord)) { tier = 'possible'; why.push('author not listed'); }
       else if (k >= 1) { tier = 'possible'; why.push(`matched ${k} of ${Q.segments.length} authors`); }
       else if (anchors >= 1 && anchors * 2 >= R) { tier = 'possible'; why.push(`matched ${anchors} of ${R} words`); }
+      else if (doc.authorless && anchors >= 1 && unanchored.length <= 3 && T.length && !doc.allSmall && T.every(it => it.wis.some(k => tHit.get(k)))) {
+        tier = 'possible'; why.push('author not listed');                                  // "holes louis sachar": the whole title, no author
+      }
       else if (demoted) tier = 'possible';
       else if (gate && allHit && loose) { tier = 'possible'; if (R > 1) why.push(`matched ${anchors} of ${R} words`); }
     }
     if (!tier) return null;
+    if (initialsWhy) { if (tier === 'match') tier = 'close'; why.push(initialsWhy); }
     // ranking data (f2)
     if (!doc.wiItem) { doc.wiItem = []; T.forEach((it, k) => it.wis.forEach(wi => { doc.wiItem[wi] = k; })); }
     const meaningful = Q.req.filter(u => u.kind !== 'isbn');
@@ -1142,21 +1377,18 @@
       if (!h) continue;
       quality += KIND_W[h.k] * FIELD_W[h.f];
       if (!u.req && u.kind !== 'isbn') optMatched++;
-      if (u.req && e.hits.some(x => x.f === F_A)) { authorUnits++; if (e.hits.some(x => x.f === F_A && KIND_CLASS[x.k] === 3)) author1 = true; }
+      if (u.req && e.hits.some(x => x.f === F_A)) { authorUnits++; if (e.hits.some(x => x.f === F_A && x.k !== K_LOOSE)) author1 = true; }
     }
     const year = Q.years.some(y => doc.year && doc.year.start === y.start && doc.year.end === y.end);
-    // "given names differ" (e3): an optional initial that did not match and is not the first letter of the other names
+    // "given names differ" (e3): an optional initial that did not match and is not among the first letters of the given names of
+    // the person whose surname matched ("G. R. R. Martin", "L. Anderson" for Laurie Halse Anderson, "M. V. Hansen" in a two-author cell)
     let givenNamesDiffer = false;
     for (const [u, nb] of exempt) {
       const e = E(u);
-      if (e && (e.c || e.m)) continue;
-      const used = new Set();
-      for (const h of nb.map.get(r).hits) if (h.f === F_A) { const [a, b] = hitSpan(h); for (let x = a; x <= b; x++) used.add(x); }
-      const others = doc.fw[F_A].W.filter((x, i) => !x.skip && !used.has(i) && !ROLE.has(x.w) && HAS_L.test(x.w)).map(x => x.w[0]).join('');
-      if ((u.x.initials || [u.w]).join('') !== others) givenNamesDiffer = true;
+      if (!(e && (e.c || e.m)) && !(typing(u) && !givenLeft) && !isSubseq(typedInitials(u), givenOf(nb))) givenNamesDiffer = true;
     }
     return { r, doc, tier, why, pinned, Q, isbnExact, titleEq, author1: author1 && Q.req.length === 1, year, anchors, inOrder,
-      authorUnits: Q.req.length > 1 ? authorUnits : 0, optMatched, quality, givenNamesDiffer, via: '', demoted };
+      authorUnits: Q.req.length > 1 ? authorUnits : 0, optMatched, quality, givenNamesDiffer, via: '', demoted, spelled: spelled && !titleInside, titleInside };
   }
   function perfectMatch(opts, n) {                                                         // bipartite: every unit gets its own title word
     const owner = new Array(n).fill(-1);
@@ -1185,13 +1417,17 @@
     }
     return { text, truncated: false };
   }
-  // (d13) alias widening: a complete alias name in the query is replaced by each other name of its group (8 at most).
-  function aliasQueries(ix, Q) {
-    const out = [], W = Q.W.filter(x => !SMALL.has(x.w));
+  // (d13) alias widening: a complete alias name in the query is replaced by each other name of its group (8 at most). The name's
+  // last word may be the word being typed (3+ letters: "daniel han"); after a comma the words may come in any order ("Handler, Daniel").
+  function aliasQueries(ix, Q, unfinished) {
+    const out = [], W = Q.W.filter(x => !SMALL.has(x.w)), lastW = Q.W[Q.W.length - 1];
     for (const group of ix.aliases) for (const name of group) {
       const k = name.key;
       for (let i = 0; i + k.length <= W.length && out.length < 8; i++) {
-        if (!k.every((w, j) => W[i + j].w === w)) continue;
+        const win = W.slice(i, i + k.length), typing = unfinished && win[k.length - 1] === lastW && lastW.w.length >= 3;
+        const same = k.every((w, j) => win[j].w === w || (typing && j === k.length - 1 && w.startsWith(win[j].w)));
+        const sorted = a => a.slice().sort().join(' ');
+        if (!same && !(k.length >= 2 && win.slice(1).some(x => x.brk.includes(',')) && sorted(win.map(x => x.w)) === sorted(k))) continue;
         const s = W[i].s, e = W[i + k.length - 1].e, t = Q.text;
         for (const other of group) if (other !== name && out.length < 8) {
           out.push({ text: (t.slice(0, s) + ' ' + fold(other.text) + ' ' + t.slice(e)).replace(/\u0001/g, ' '), typed: t.slice(s, e),
@@ -1209,17 +1445,23 @@
     if (o.stop) return out;
     const spell = [], loose = [], expl = [];
     const cell = h => fieldText(o.doc, h.f).slice(h.s, h.e);
+    const exact = new Set();                                  // cell words another query word matched exactly: no "similar spelling" for them
+    for (const u of o.Q.units) { const e = u.map && u.map.get(o.r); if (e && e.c && KIND_CLASS[e.c.k] === 3) exact.add(e.c.f + ':' + e.c.s); }
     for (const u of o.Q.units) {
       const e = u.map && u.map.get(o.r), h = e && (e.c || e.m);
       if (!h) continue;
+      if (h.why === 'fz' && exact.has(h.f + ':' + h.s)) continue;
       if (h.why === 'fz' && (o.tier !== 'possible' || o.demoted)) spell.push(`similar spelling: ${cell(h)}`);
       else if (h.why === 'c2' && o.tier !== 'possible') spell.push(`written as two words: ${cell(h)}`);
       else if (h.why === 'c1' && o.tier !== 'possible') spell.push(`written as one word: ${cell(h)}`);
       else if (h.k === K_LOOSE && h.why === 'lo') loose.push(`other number: ${cell(h)}`);
       else if ((h.why === 'eq' || h.why === 'pair') && bare(h.q) !== bare(cell(h))) expl.push(`${h.q} = ${cell(h)}`);
+      else if (h.why === 'eq2') expl.push(`${h.q} = ${e.hits.filter(x => x.why === 'eq2' && x.f === h.f).sort((a, b) => a.s - b.s).map(cell).join(' ')}`);
     }
     const lead = out.filter(x => /^(?:via alias|searched without|same title|covers a whole|the whole listed title)/.test(x));
     const list = lead.concat(spell, out.filter(x => !lead.includes(x)), loose, o.givenNamesDiffer ? ['given names differ'] : [], expl.slice(0, 3));
+    // a Close whose only similar spelling was a cell word also matched exactly ("…Chicken Soup for the Soul"): the reverse check explains it
+    if (!list.length && o.tier === 'close' && o.titleInside) list.push('the whole listed title is in your search');
     return [...new Set(list)].slice(0, 6);
   }
   // (g4) highlights: [start, end) ranges on display.title, row.author, row.memo, row.isbn
@@ -1230,7 +1472,9 @@
       const e = u.map && u.map.get(o.r);
       if (!e || !e.c) continue;
       const cls = KIND_CLASS[e.c.k];                                                       // only the unit's best kind of hit
-      for (const h of e.hits) if (h.f <= F_I && KIND_CLASS[h.k] === cls) (u.small ? small : byField[h.f]).push(h);
+      for (const h of e.hits) {                            // an ordinal<->cardinal crossing only when nothing better matched
+        if (h.f <= F_I && KIND_CLASS[h.k] === cls && !(h.k === K_ALTX && e.c.k !== K_ALTX)) (u.small ? small : byField[h.f]).push(h);
+      }
     }
     for (const h of small) if (byField[h.f].some(x => Math.abs(x.wi - h.wi) === 1 || Math.abs(x.wj - h.wi) === 1)) byField[h.f].push(h);
     const out = {};
@@ -1244,8 +1488,9 @@
         for (; i < st.s.length && n < h.n; i++) if (st.s[i] !== "'") n++;
         return [h.s, Math.min(h.e, st.b[i - 1])];
       }).sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-      const merged = [];
+      const merged = [], txt = ranges.length ? fieldText(o.doc, f) : '';
       for (const r of ranges) {
+        while (r[1] < txt.length && /\p{M}/u.test(txt[r[1]])) r[1]++;                  // a trailing combining accent (NFD text) is part of the word
         const last = merged[merged.length - 1];
         if (last && r[0] < last[1]) last[1] = Math.max(last[1], r[1]); else merged.push(r.slice());
       }
@@ -1253,16 +1498,16 @@
     });
     return out;
   }
-  function fieldsFor(o) {
+  function fieldsFor(o) {                                  // the fields of each unit's best kind of hit (as highlighted), and Type/Banned By
     const seen = new Set(o.stop ? [F_T] : []);
     for (const u of o.Q.units.concat(o.Q.isbn)) {
       const e = !u.small && u.map && u.map.get(o.r);
-      if (e) for (const h of e.hits) seen.add(h.f);
+      if (e) for (const h of e.hits) if (h.f >= F_Y || (e.c && KIND_CLASS[h.k] === KIND_CLASS[e.c.k])) seen.add(h.f);
     }
     return FIELD_ORDER.filter(f => seen.has(f)).map(f => FIELD_NAMES[f]);
   }
-  // (f2) sort key, larger first; ties by row id
-  const rankKey = (o, main) => [main && o.pinned ? 1 : 0, o.isbnExact ? 1 : 0, o.via ? 0 : 1, o.titleEq ? 1 : 0, o.author1 ? 1 : 0,
+  // (f2) sort key, larger first; ties by row id. In main, Match hits come before Close hits (PRD: ranked in tiers, then within a tier).
+  const rankKey = (o, main) => [main && o.pinned ? 1 : 0, main ? TIER_RANK[o.tier] : 0, o.isbnExact ? 1 : 0, o.via ? 0 : 1, o.titleEq ? 1 : 0, o.author1 ? 1 : 0,
     o.year ? 1 : 0, main ? 0 : o.anchors || 0, o.inOrder || 0, o.authorUnits || 0, o.optMatched || 0, o.quality || 0];
   function ranked(list, main) {
     const keyed = list.map(o => ({ o, k: rankKey(o, main) }));
@@ -1295,17 +1540,19 @@
     if (!chars) { res.state = 'empty'; return res; }
     if (chars === 1 && !enter) { res.state = 'tooShort'; return res; }
     if (!ix || !ix.docs) return res;
-    const unfinished = !truncated && !/\s$/.test(text);                                   // (d2) a trailing space finishes the word
+    // (d2) a trailing space finishes the word; so does opts.finished (a line of a pasted list is complete text)
+    const unfinished = !truncated && !(opts && opts.finished) && !/\s$/.test(text);
     const base = evaluate(ix, text, unfinished), Q = base.Q, rows = base.rows;
     res.isbnQuery = Q.isbnQuery;
     if (base.state !== 'ok') { res.state = base.state; return res; }
     if (Q.foreign) {                                                                      // (d12) run 2 without the foreign article
       for (const [r, o] of evaluate(ix, Q.foreign.text, unfinished).rows) {
-        const t = o.tier === 'possible' ? 'possible' : 'close', b = rows.get(r);
-        if (!b || TIER_RANK[t] > TIER_RANK[b.tier]) rows.set(r, Object.assign({}, o, { tier: t, via: 'foreign', pinned: false, why: [`searched without "${Q.foreign.word}"`].concat(o.why) }));
+        // a row found only by a similar spelling of the words after the article is Possible ("le carre" is not Carrie)
+        const t = o.tier === 'possible' || (o.tier === 'close' && o.spelled) ? 'possible' : 'close', b = rows.get(r);
+        if (!b || TIER_RANK[t] > TIER_RANK[b.tier]) rows.set(r, Object.assign({}, o, { tier: t, via: 'foreign', pinned: false, why: [`searched without "${Q.foreign.word}"`].concat(o.why), demoted: o.demoted || t !== o.tier }));
       }
     }
-    for (const a of Q.W.length ? aliasQueries(ix, Q) : []) {                               // (d13) alias widening
+    for (const a of Q.W.length ? aliasQueries(ix, Q, unfinished) : []) {                               // (d13) alias widening
       for (const [r, o] of evaluate(ix, a.text, unfinished && !a.atEnd).rows) {
         const b = rows.get(r);
         if (!b || TIER_RANK[o.tier] > TIER_RANK[b.tier]) rows.set(r, Object.assign({}, o, { via: 'alias', why: [`via alias: ${a.typed} \u2192 ${a.name}`].concat(o.why) }));
@@ -1318,6 +1565,10 @@
         rows.set(o.r, Object.assign({}, o, { tier: 'close', why: ['same title and author as another result'].concat(o.why), demoted: false }));
       }
     }
+    // (e7) the rest of a main hit's group joins it: an ISBN or memo search reaches one row of a work, and the Ministry row of the
+    // same title and author must show beside it
+    const sibling = r => ({ r, doc: ix.docs[r], tier: 'close', why: ['same title and author as another result'], Q, pinned: false, quality: 0 });
+    for (const o of [...rows.values()]) if (o.tier !== 'possible') for (const r of ix.groupRows.get(o.doc.groupKey) || []) if (!rows.has(r)) rows.set(r, sibling(r));
     const all = [...rows.values()];
     const main = ranked(all.filter(o => o.tier !== 'possible'), true), possible = ranked(all.filter(o => o.tier === 'possible'), false);
     res.main = main.map(x => toHit(x.o, x.size));
@@ -1327,13 +1578,15 @@
       const F = ix.isbnForms, d = Q.digits, inMain = new Set(main.map(x => x.o.r)), seen = new Set(), found = [];
       let lo = 0, hi = F.length;
       while (lo < hi) { const mid = (lo + hi) >> 1; if (F[mid].f < d) lo = mid + 1; else hi = mid; }
-      for (let i = lo; i < F.length && F[i].f.startsWith(d); i++) if (!inMain.has(F[i].r) && !seen.has(F[i].r)) { seen.add(F[i].r); found.push(F[i]); }
-      found.sort((a, b) => ix.docs[a.r].id - ix.docs[b.r].id);
-      res.isbnPrefix = found.map(x => {
-        const doc = ix.docs[x.r];
-        return { row: doc.row, tier: 'possible', score: 0, reasons: [`ISBN starts with ${d}`], fields: ['isbn'],
-          display: { title: doc.display, titleAsWritten: String(doc.row.title ?? '') }, highlights: { title: [], author: [], memo: [], isbn: [[x.s, x.e]] },
-          notes: doc.notes.slice(), groupKey: doc.groupKey, groupSize: 1 };
+      for (let i = lo; i < F.length && F[i].f.startsWith(d); i++) if (!inMain.has(F[i].r) && !seen.has(F[i].r)) { seen.add(F[i].r); found.push({ r: F[i].r, doc: ix.docs[F[i].r], x: F[i] }); }
+      for (const o of found.slice()) for (const r of ix.groupRows.get(o.doc.groupKey) || []) {   // with the rest of each group (e7)
+        if (!inMain.has(r) && !seen.has(r)) { seen.add(r); found.push({ r, doc: ix.docs[r], x: null }); }
+      }
+      res.isbnPrefix = ranked(found, false).map(({ o, size }) => {
+        const doc = o.doc, x = o.x;
+        return { row: doc.row, tier: 'possible', score: 0, reasons: [x ? `ISBN starts with ${d}` : 'same title and author as another result'], fields: x ? ['isbn'] : [],
+          display: { title: doc.display, titleAsWritten: String(doc.row.title ?? '') }, highlights: { title: [], author: [], memo: [], isbn: x ? [[x.s, x.e]] : [] },
+          notes: doc.notes.slice(), groupKey: doc.groupKey, groupSize: size };
       });
     }
     res.hints = hintsFor(ix, Q, res, enter, unfinished, isbnMatched);
@@ -1343,12 +1596,14 @@
   // ---------- (g3) hints: only when state is ok; never claim an item is permitted ----------
   function hintsFor(ix, Q, res, enter, unfinished, isbnMatched) {
     const empty = !res.main.length && !res.possible.length && !res.isbnPrefix.length, W = Q.W, last = W[W.length - 1];
-    if (!enter && empty && unfinished && last && last.w.length <= 2 && !Q.isbnQuery) {
+    // not after initials ("Hansen, M. V."), a letter with a period, or a label's number ("grade 9"): those are complete
+    if (!enter && empty && unfinished && last && last.w.length <= 2 && !last.initials && !last.dot && !last.pair && !Q.isbnQuery) {
       return [{ code: 'keepTyping', text: 'Keep typing: word endings are matched from the third letter.' }];
     }
     const hints = [];
     if ((Q.isbnQuery || Q.hasCompleteIsbn) && !isbnMatched && !res.isbnPrefix.length && !res.main.length) {
-      hints.push({ code: 'isbnNoMatch', text: `No ISBN match. ${ix.isbnRowCount * 2 >= ix.rowCount ? 'Some' : 'Most'} rows have no ISBN, so search the title and author.` });
+      hints.push({ code: 'isbnNoMatch', text: ix.isbnRowCount >= ix.rowCount ? 'No ISBN match. Search the title and author too.'
+        : `No ISBN match. ${ix.isbnRowCount * 2 >= ix.rowCount ? 'Some' : 'Most'} rows have no ISBN, so search the title and author.` });
     }
     if (res.main.length) return hints;
     const seen = new Set();
