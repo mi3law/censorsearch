@@ -28,6 +28,17 @@ const PAGE_IDS = [
   ['details', 'maintainer-notes'], ['summary', 'maintainer-summary'], ['ul', 'maintainer-list'], ['a', 'footer-sheet'], ['a', 'footer-repo'],
 ];
 
+// crypto.subtle.digest runs on Node's thread pool, so its promise can settle after flush() on a slow machine (CI).
+// This stand-in computes the same SHA-256 synchronously and settles as a microtask, keeping the tests deterministic.
+const syncCrypto = {
+  subtle: {
+    digest: async (alg, data) => {
+      const h = require('crypto').createHash(String(alg).replace('-', '').toLowerCase()).update(Buffer.from(data)).digest();
+      return h.buffer.slice(h.byteOffset, h.byteOffset + h.byteLength);
+    },
+  },
+};
+
 function makePage(opts = {}) {
   const RealDate = Date;
   const clock = { offset: 0 };
@@ -160,7 +171,7 @@ function makePage(opts = {}) {
   const win = {
     document: doc, location: { href, search: u.search, hash: u.hash, pathname: u.pathname, origin: u.origin },
     console: { log: (...a) => logs.push(a), warn: (...a) => logs.push(a), error: (...a) => logs.push(a), info() {}, debug() {} },
-    URL, URLSearchParams, Response, Headers, AbortController, DOMException, TextEncoder, crypto: globalThis.crypto,
+    URL, URLSearchParams, Response, Headers, AbortController, DOMException, TextEncoder, crypto: syncCrypto,
     Date: FakeDate, setTimeout: setTimeout_, clearTimeout: clear, setInterval: setInterval_, clearInterval: clear,
     Node: Node_,
     listeners: {},
