@@ -24,14 +24,37 @@ const FIXED_NOW = '2026-01-02T03:04:05.000Z';
 const FIXED_MS = Date.parse(FIXED_NOW);
 const NO_TITLE = "No Title column in the first 10 rows of this tab, so it can't be searched.";
 
+// The page's adapter (src/sheet.js) and engine, when they exist.
+const sheetJs = (() => {
+  if (!fs.existsSync(SHEET_JS)) return null;
+  try {
+    const m = require(SHEET_JS);
+    return typeof m.tablesFromScript === 'function' ? m : null;
+  } catch (e) {
+    return null;
+  }
+})();
+const noSheetJs = sheetJs ? false : 'src/sheet.js with tablesFromScript is not available';
+const engine = (() => {
+  try {
+    const m = require(path.join(ROOT, 'src', 'engine.js'));
+    return typeof m.buildIndex === 'function' && typeof m.search === 'function' ? m : null;
+  } catch (e) {
+    return null;
+  }
+})();
+const noEngine = noSheetJs || (engine ? false : 'src/engine.js is not available');
+
 // Method names a read-only script must never call on a Google object (the task's list plus a few more).
 const FORBIDDEN = /^(set|insert|delete|clear|append|copy|move|remove|protect|sort|hide|show|activate|merge|break|create|add|duplicate|trim|auto|randomize|shift|uncheck|check|flush|group|ungroup|expand|collapse)/;
-// Everything Code.gs may call on the spreadsheet objects: getters only.
+// Everything Code.gs may call on the spreadsheet objects: getters only. Not the per-row isRowHiddenByUser/Filter:
+// hidden flags come from one Sheets API call per tab (AS-2).
 const SPREADSHEET_GETTERS = new Set([
   'openById', 'getSheets', 'getSheetId', 'getName', 'isSheetHidden', 'getRange', 'getDataRange', 'getDisplayValues',
-  'getValues', 'getRichTextValues', 'getFormulas', 'getMergedRanges', 'isRowHiddenByUser', 'isRowHiddenByFilter',
+  'getValues', 'getRichTextValues', 'getFormulas', 'getMergedRanges',
   'getLastRow', 'getLastColumn', 'getRow', 'getColumn', 'getNumRows', 'getNumColumns', 'getLinkUrl', 'getRuns', 'getText',
 ]);
+const HIDDEN_FIELDS = 'sheets(data(startRow,rowMetadata(hiddenByUser,hiddenByFilter)))';
 
 // ------------------------------------------------------------------------------------------------
 // Mock Google services
@@ -144,6 +167,31 @@ function makeSpreadsheet(sheets, log, opts = {}) {
   }, 'Spreadsheet', log);
 }
 
+// The Sheets advanced service (Sheets.Spreadsheets.get), answering only the row-metadata request Code.gs makes.
+// Like the real API it leaves out startRow when it is 0 and false flags inside rowMetadata.
+function makeSheetsApi(specs, log, mode) {
+  const spreadsheets = {
+    get(id, opts) {
+      if (mode === 'throws') throw new Error(`GoogleJsonResponseException: API call to sheets.spreadsheets.get failed with error: Quota exceeded (${SHEET_ID})`);
+      if (id !== SHEET_ID) throw new Error('Requested entity was not found.');
+      const m = /^'((?:[^']|'')*)'!A(\d+):A(\d+)$/.exec(opts && opts.ranges && opts.ranges.length === 1 ? opts.ranges[0] : '');
+      if (!m || !opts.fields || !opts.fields.includes('rowMetadata')) return {};
+      const spec = specs.find(s => s.name === m[1].replace(/''/g, "'"));
+      if (!spec) throw new Error('Unable to parse range');
+      const r1 = Number(m[2]), r2 = Number(m[3]);
+      const rowMetadata = [];
+      for (let r = r1; r <= r2; r++) {
+        const md = {};
+        if ((spec.hiddenByUser || []).includes(r)) md.hiddenByUser = true;
+        if ((spec.hiddenByFilter || []).includes(r)) md.hiddenByFilter = true;
+        rowMetadata.push(md);
+      }
+      return { sheets: [{ data: [{ ...(r1 > 1 ? { startRow: r1 - 1 } : {}), rowMetadata }] }] };
+    },
+  };
+  return guard({ Spreadsheets: guard(spreadsheets, 'AdvancedSheets', log) }, 'AdvancedSheetsRoot', log);
+}
+
 function utf8Bytes(s) { return Buffer.byteLength(s, 'utf8'); }
 
 function makeCache(log, opts = {}) {
@@ -167,7 +215,8 @@ function makeCache(log, opts = {}) {
 }
 
 // A Google environment plus a fresh copy of Code.gs; get(parameter) calls doGet like a web request.
-function env({ props = { SPREADSHEET_ID: SHEET_ID }, sheets = defaultSheets(), openThrows = null, getSheetsThrows = null, cacheThrows = false } = {}) {
+// sheetsApi: 'on' (the manifest's Sheets advanced service), 'missing' (service turned off) or 'throws' (e.g. over its limit).
+function env({ props = { SPREADSHEET_ID: SHEET_ID }, sheets = defaultSheets(), openThrows = null, getSheetsThrows = null, cacheThrows = false, sheetsApi = 'on' } = {}) {
   const log = { calls: [], violations: [], cacheTtls: [] };
   const spreadsheet = makeSpreadsheet(sheets, log, { getSheetsThrows });
   const { store, cache } = makeCache(log, { throws: cacheThrows });
@@ -200,6 +249,7 @@ function env({ props = { SPREADSHEET_ID: SHEET_ID }, sheets = defaultSheets(), o
       },
     }, 'ContentService', log, new Set(['createTextOutput'])),
   };
+  if (sheetsApi !== 'missing') ctx.Sheets = makeSheetsApi(sheets, log, sheetsApi);
   vm.createContext(ctx);
   vm.runInContext(CODE, ctx, { filename: 'Code.gs' });
   const get = (parameter = {}) => {
@@ -299,7 +349,11 @@ function assertReadOnly(log) {
   assert.deepEqual(unexpected, [], 'only the listed getters are called on the spreadsheet');
   const propCalls = log.calls.filter(c => c.label === 'ScriptProperties').map(c => c.name);
   assert.ok(propCalls.every(n => n === 'getProperty'), 'script properties are only read');
+  const apiCalls = log.calls.filter(c => /^AdvancedSheets/.test(c.label));
+  assert.ok(apiCalls.every(c => c.label === 'AdvancedSheets' && c.name === 'get'), 'the Sheets service is only used for Spreadsheets.get');
+  for (const c of apiCalls) assert.equal(c.args[1].fields, HIDDEN_FIELDS, 'and only for the hidden-row flags');
 }
+const apiGets = log => log.calls.filter(c => c.label === 'AdvancedSheets' && c.name === 'get');
 
 // ------------------------------------------------------------------------------------------------
 // The response
@@ -335,6 +389,36 @@ test('hidden tabs and tabs without a Title header are left out by default', () =
   assert.deepEqual(json.errors, []);
 });
 
+// AS-3: v1 reads the main tab only; no other tab is published unless TABS names it.
+test('without TABS only the first visible tab is served, even if another tab has a Title-like header', () => {
+  const contacts = { name: 'Contacts', gid: 42, grid: [['Name', 'Email', 'Phone', 'Notes'], ['Jane Teacher', 'jane.teacher', '555-0100', 'on leave until May']] };
+  let e = env({ sheets: [...defaultSheets(), contacts] });
+  let r = e.get();
+  assert.deepEqual(r.json, EXPECTED);
+  for (const leaked of ['Jane', 'on leave', 'Contacts']) assert.ok(!r.body.includes(leaked), `response must not contain "${leaked}"`);
+  assert.deepEqual(e.get({ gid: '42' }).json.errors, [{ tab: 'gid 42', message: 'This tab is not available from this script.' }]);
+  assertReadOnly(e.log);
+
+  // The first tab is hidden: the first visible one is served instead.
+  const sheets = defaultSheets();
+  sheets.unshift({ ...contacts, hidden: true });
+  r = env({ sheets }).get();
+  assert.deepEqual(r.json, EXPECTED);
+
+  // TABS still opens any tab, in its order.
+  r = env({ sheets: [...defaultSheets(), contacts], props: { SPREADSHEET_ID: SHEET_ID, TABS: '0,42' } }).get();
+  assert.deepEqual(r.json.tabs.map(t => t.name), ['Sheet1', 'Contacts']);
+});
+
+test('without TABS, a first tab that is not a list or no visible tab at all is a plain error, never a silent empty list', () => {
+  let r = env({ sheets: [{ name: 'Notes', gid: 222, grid: [['Legend']] }, ...defaultSheets()] }).get();
+  assert.deepEqual(r.json.tabs, []);
+  assert.deepEqual(r.json.errors, [{ tab: 'Notes', message: NO_TITLE }]);
+  r = env({ sheets: [{ ...defaultSheets()[0], hidden: true }] }).get();
+  assert.deepEqual(r.json.tabs, []);
+  assert.deepEqual(r.json.errors, [{ tab: '', message: 'Every tab is hidden. Add the list\'s tab id to TABS in the script properties.' }]);
+});
+
 test('rows above the header keep one entry per row, empty rows as []', () => {
   const sheets = defaultSheets();
   sheets[0].grid.splice(1, 0, ['', '', '']);   // blank row 2; header moves to row 4
@@ -352,6 +436,43 @@ test('a merge that starts above the data or in an unmapped column is not spread 
   assert.deepEqual(rows[4], SHEET1.rows[0].values, 'header text is not copied into row 4');
   assert.equal(rows[9][3], '', 'without the D8:D9 merge, row 9 Banned By stays empty');
   assert.deepEqual(rows[8], SHEET1.rows[4].values, 'a one-row merge copies nothing');
+});
+
+// SEC-04 / COV-8: above the header only the list's title and its "updated as of" line leave the sheet.
+test('above the header only the banner title and the "updated" line are returned, never other cells', () => {
+  const e = '';
+  const sheets = [{
+    name: 'Sheet1', gid: 0,
+    grid: [
+      ['My list', e, e, e, e, e, e, e, e, 'PRIVATE: script owner phone 555-0100'],
+      ['updated as of 1 Jan', e, e, e, e, e, e, 'Internal: do not share', e, e],
+      ['Title', 'Author', 'ISBN', 'Banned By', 'Type', 'Year of Banning', 'Memo', e, e, e],
+      ['Book A', 'Ann', e, 'Ministry', 'Book', '2024', e, e, e, 'secret J4'],
+    ],
+  }];
+  const { json, body } = env({ sheets }).get();
+  assert.deepEqual(json.tabs[0].above, [['My list'], ['updated as of 1 Jan']]);
+  for (const leaked of ['PRIVATE', '555-0100', 'Internal', 'secret J4']) assert.ok(!body.includes(leaked), `response must not contain "${leaked}"`);
+});
+
+test('the kept cells give the page the same banner title and "updated" line as the CSV path', { skip: noSheetJs }, () => {
+  const e = '';
+  const layouts = [
+    [['My list', e, e, 'note'], ['updated as of 1 Jan', e, 'other note', e]],
+    [['updated as of 1 Jan', 'My list', 'note', e], [e, e, e, e]],          // "updated" first, banner after it
+    [[e, e, e, 'note only'], ['updated as of 1 Jan', e, e, e]],               // the banner is whatever comes first
+    [['Last updated list', e, e, e], ['updated as of 1 Jan', 'note', e, e]],  // two "updated" cells
+    [[e, e, e, e], [e, e, e, e]],
+  ];
+  for (const top of layouts) {
+    const grid = [...top, ['Title', 'Author', 'Banned By', e], ['Book A', 'Ann', 'Ministry', e]];
+    const { json } = env({ sheets: [{ name: 'Sheet1', gid: 0, grid }] }).get();
+    const viaScript = sheetJs.extractRows(sheetJs.tablesFromScript(json).tables[0], { schoolCode: 'UAS' }).meta;
+    const viaCsv = sheetJs.extractRows(sheetJs.tableFromCsv(grid, { tab: 'Sheet1', gid: '0', sheetId: SHEET_ID }), { schoolCode: 'UAS' }).meta;
+    assert.equal(viaScript.updatedAsOf, viaCsv.updatedAsOf, JSON.stringify(top));
+    assert.equal(viaScript.bannerTitle, viaCsv.bannerTitle, JSON.stringify(top));
+    assert.ok(json.tabs[0].above.flat().length <= 2, 'at most two cells above the header');
+  }
 });
 
 // ------------------------------------------------------------------------------------------------
@@ -392,7 +513,11 @@ test('?gid= picks tabs within the allow-list only', () => {
   assert.deepEqual(j.tabs, []);
   assert.deepEqual(j.errors, [{ tab: 'gid 333', message: 'This tab is not available from this script.' }]);
 
-  j = e.get({ gid: '222' }).json;
+  j = e.get({ gid: '222' }).json;   // visible but not the first tab, and not in TABS
+  assert.deepEqual(j.tabs, []);
+  assert.deepEqual(j.errors, [{ tab: 'gid 222', message: 'This tab is not available from this script.' }]);
+
+  j = env({ props: { SPREADSHEET_ID: SHEET_ID, TABS: '0,222' } }).get({ gid: '222' }).json;
   assert.deepEqual(j.tabs, []);
   assert.deepEqual(j.errors, [{ tab: 'Notes', message: NO_TITLE }]);
 
@@ -424,7 +549,7 @@ test('no Title header anywhere: an error entry, never a silent empty list', () =
   const sheets = [{ name: 'Notes', gid: 222, grid: [['Legend'], ['Red = Ministry']] }];
   const { json } = env({ sheets }).get();
   assert.deepEqual(json.tabs, []);
-  assert.deepEqual(json.errors, [{ tab: '', message: 'No tab has a Title column in its first 10 rows.' }]);
+  assert.deepEqual(json.errors, [{ tab: 'Notes', message: NO_TITLE }]);
 });
 
 test('a tab that fails to read becomes an error entry; other tabs still load', () => {
@@ -434,6 +559,59 @@ test('a tab that fails to read becomes an error entry; other tabs still load', (
   assert.deepEqual(json.tabs, plain([ARCHIVE]));
   assert.deepEqual(json.errors, [{ tab: 'Sheet1', message: 'Could not read this tab. Try again in a minute.' }]);
   assert.ok(!body.includes('Service error'));
+});
+
+// ------------------------------------------------------------------------------------------------
+// Hidden rows (AS-2): one Sheets API call per tab, never two service calls per row
+
+function bigSheet(n, extra = {}) {
+  const grid = [['Banned list'], ['updated as of 1 Jan'], ['Title', 'Author', 'ISBN', 'Banned By', 'Type', 'Year of Banning', 'Memo']];
+  for (let i = 0; i < n; i++) grid.push([`Book ${i}`, `Author ${i}`, '', 'Ministry', 'Book', '2024', '']);
+  return { name: 'Sheet1', gid: 0, grid, ...extra };
+}
+
+test('hidden flags come from one Sheets API call per tab, so the work does not grow with the row count', () => {
+  const small = env({ sheets: [bigSheet(10)] });
+  small.get();
+  const big = env({ sheets: [bigSheet(1200, { hiddenByUser: [700], hiddenByFilter: [1150, 1203] })] });
+  const { json } = big.get();
+  assertReadOnly(big.log);
+  assert.equal(big.log.calls.filter(c => /^isRowHidden/.test(c.name)).length, 0, 'no per-row isRowHidden* calls');
+  const gets = apiGets(big.log);
+  assert.equal(gets.length, 1);
+  assert.deepEqual(plain(gets[0].args), [SHEET_ID, { ranges: ["'Sheet1'!A4:A1203"], fields: HIDDEN_FIELDS }]);
+  const serviceCalls = log => log.calls.filter(c => /^(SpreadsheetApp|Spreadsheet|Sheet|Range|AdvancedSheets)$/.test(c.label)).length;
+  assert.equal(serviceCalls(big.log), serviceCalls(small.log), '1,200 rows take as many service calls as 10');
+  const rows = json.tabs[0].rows;
+  assert.equal(rows.length, 1200);
+  assert.deepEqual(rows.filter(r => r.hidden).map(r => r.row), [700, 1150, 1203]);
+  assert.ok(rows.every(r => typeof r.hidden === 'boolean'));
+});
+
+test('a tab name with quotes is quoted for the Sheets API range', () => {
+  const sheets = defaultSheets();
+  sheets[0].name = "Bob's 'list'";
+  const e = env({ sheets });
+  const { json } = e.get();
+  assert.deepEqual(plain(apiGets(e.log)[0].args[1].ranges), ["'Bob''s ''list'''!A4:A13"]);
+  assert.deepEqual(json.tabs[0].rows.filter(r => r.hidden).map(r => r.row), [10, 11]);
+});
+
+test('without the Sheets service, or when it fails, rows come back with hidden: null and the list still loads', () => {
+  for (const sheetsApi of ['missing', 'throws']) {
+    const e = env({ sheetsApi });
+    const { json, body } = e.get();
+    assert.deepEqual(json.errors, [], sheetsApi);
+    const expected = plain(SHEET1);
+    expected.rows.forEach(r => { r.hidden = null; });
+    assert.deepEqual(json.tabs, [expected], sheetsApi);
+    assert.ok(!body.includes('Quota') && !body.includes('Exception'), 'Google\'s error text stays out of the response');
+    assertReadOnly(e.log);
+    if (sheetJs) {
+      const { rows } = sheetJs.extractRows(sheetJs.tablesFromScript(json).tables[0], { schoolCode: 'UAS' });
+      assert.ok(rows.length === 8 && rows.every(r => r.hidden === null), 'the page treats the flags as unknown');
+    }
+  }
 });
 
 // ------------------------------------------------------------------------------------------------
@@ -468,6 +646,13 @@ test('SPREADSHEET_ID may be the whole sheet link', () => {
 test('a spreadsheet the account cannot open gives a plain error without ids, emails or stack', () => {
   const { json } = env({ openThrows: `Exception: You do not have permission to access the requested document. (teacher@school.example, ${SHEET_ID})` }).get();
   assertPlainError(json, "Can't open the spreadsheet");
+});
+
+// AS-1: a missing permission is named as such, instead of sending the maintainer to check the id and sharing.
+test('a script without permission to open spreadsheets says so and points to appsscript.json', () => {
+  const { json } = env({ openThrows: 'Exception: You do not have permission to call SpreadsheetApp.openById. Required permissions: https://www.googleapis.com/auth/spreadsheets' }).get();
+  assertPlainError(json, 'appsscript.json');
+  assert.ok(!json.error.includes("Can't open the spreadsheet"), json.error);
 });
 
 test('an unexpected failure gives a generic plain error', () => {
@@ -579,8 +764,26 @@ test('raw ISBN digits', () => {
   assert.equal(r('978-0-06-112008-4'), '9780061120084');
   assert.equal(r('ISBN 978-0-06-112008-4'), '9780061120084');
   assert.equal(r('ISBN-13: 978 0 06 112008 4'), '9780061120084');
-  for (const bad of [9.5, -3, '', '978-0-06-112008-4, 978-0-06-112009-1', 'unknown', null, undefined, true]) {
-    assert.equal(r(bad), '', String(bad));
+  assert.equal(r(123456789), '123456789', 'a 9-digit number (lost leading 0) is kept; the page restores the 0');
+  // E2-05: only one whole ISBN (9, 10 or 13 characters). Several ISBNs in a cell are left to the page, which splits the display.
+  for (const bad of [9.5, -3, '', '978-0-06-112008-4, 978-0-06-112009-1', 'unknown', null, undefined, true,
+    '9780394747231\n9780679748403', '9780062498533 9780062498540', '0394747231 9780679748403', '12345', 12345, 978039474723, '97803947472311']) {
+    assert.equal(r(bad), '', JSON.stringify(bad));
+  }
+});
+
+test('a cell with two ISBNs sends no raw value, and the page finds both ISBNs as on the CSV path', { skip: noEngine }, () => {
+  const sheets = defaultSheets();
+  sheets[0].grid[5][2] = '9780394747231\n9780679748403';   // row 6, ISBN column: two ISBNs on two lines (a text cell)
+  const { json } = env({ sheets }).get();
+  const row6 = json.tabs[0].rows.find(r => r.row === 6);
+  assert.deepEqual(row6.raw, {});
+  const { rows } = sheetJs.extractRows(sheetJs.tablesFromScript(json).tables[0], { schoolCode: 'UAS' });
+  rows.forEach((row, i) => { row.id = i; });
+  const ix = engine.buildIndex(rows);
+  for (const isbn of ['9780394747231', '9780679748403']) {
+    const hits = engine.search(isbn, ix).main.map(h => h.row.row);
+    assert.deepEqual(hits, [6], `ISBN ${isbn}`);
   }
 });
 
@@ -610,6 +813,8 @@ test('Code.gs calls no write, Drive, network, mail or logging API', () => {
   assert.equal(services, null, `unexpected services: ${services}`);
   assert.ok(!/\bfunction\s+doPost\b/.test(src), 'GET only');
   assert.ok(!/eval\s*\(|new Function/.test(src));
+  const sheetsApi = src.match(/\bSheets\s*\.[\w.\s]*/g) || [];
+  assert.deepEqual([...new Set(sheetsApi.map(x => x.replace(/\s/g, '')))], ['Sheets.Spreadsheets.get'], 'the Sheets service is used for Spreadsheets.get only');
 });
 
 test('no email address or spreadsheet id in the script or its README', () => {
@@ -620,12 +825,16 @@ test('no email address or spreadsheet id in the script or its README', () => {
   }
 });
 
-test('manifest: V8, read-only scope, web app runs as the deploying account for anyone', () => {
+// AS-1: SpreadsheetApp.openById accepts only the spreadsheets scope (Google's reference lists no read-only scope for it);
+// the script stays read-only because it calls getters only and its account has Viewer access (PRD, "Fallback path").
+test('manifest: V8, the spreadsheets scope openById needs, Sheets service, web app runs as the deploying account for anyone', () => {
   assert.equal(MANIFEST.runtimeVersion, 'V8');
-  assert.deepEqual(MANIFEST.oauthScopes, ['https://www.googleapis.com/auth/spreadsheets.readonly']);
+  assert.deepEqual(MANIFEST.oauthScopes, ['https://www.googleapis.com/auth/spreadsheets']);
   assert.deepEqual(MANIFEST.webapp, { executeAs: 'USER_DEPLOYING', access: 'ANYONE_ANONYMOUS' });
   assert.equal(MANIFEST.exceptionLogging, 'STACKDRIVER');
-  assert.equal(MANIFEST.dependencies, undefined, 'no libraries or advanced services');
+  assert.deepEqual(MANIFEST.dependencies, { enabledAdvancedServices: [{ userSymbol: 'Sheets', serviceId: 'sheets', version: 'v4' }] },
+    'no libraries; one advanced service, Sheets, for the hidden-row flags');
+  assert.ok(!README.includes('spreadsheets.readonly') && !/read-only permission/i.test(README), 'the README does not promise a read-only permission');
 });
 
 test('README covers the deployment steps a teacher needs', () => {
@@ -638,17 +847,6 @@ test('README covers the deployment steps a teacher needs', () => {
 
 // ------------------------------------------------------------------------------------------------
 // The page's adapter (src/sheet.js), when it exists
-
-const sheetJs = (() => {
-  if (!fs.existsSync(SHEET_JS)) return null;
-  try {
-    const m = require(SHEET_JS);
-    return typeof m.tablesFromScript === 'function' ? m : null;
-  } catch (e) {
-    return null;
-  }
-})();
-const noSheetJs = sheetJs ? false : 'src/sheet.js with tablesFromScript is not available';
 
 test('src/sheet.js accepts the script JSON and yields the right rows', { skip: noSheetJs }, () => {
   const json = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
@@ -721,7 +919,7 @@ test('sample sheet via Code.gs gives the page the same rows as the CSV path', { 
   const tabs = LIVE.map(t => ({ ...t, grid: sheetJs.parseCsv(fs.readFileSync(t.path, 'utf8')) }));
   const width = Math.max(...tabs.flatMap(t => t.grid.map(r => r.length)));
   const sheets = tabs.map(t => ({ name: t.name, gid: t.gid, grid: t.grid.map(r => [...r, ...Array(width - r.length).fill('')]) }));
-  const { json, body } = env({ sheets }).get();
+  const { json, body } = env({ sheets, props: { SPREADSHEET_ID: SHEET_ID, TABS: LIVE.map(t => t.gid).join(',') } }).get();
   assert.deepEqual(json.errors, []);
   assert.deepEqual(json.tabs.map(t => t.name), ['Sheet1', 'Other Materials']);
   assert.ok(!/Notes:/.test(body), 'the Sheet1 notes box (headerless column) is not returned');

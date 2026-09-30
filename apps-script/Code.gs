@@ -3,17 +3,19 @@
  *
  * A standalone web app for a sheet that can't be shared by link. It opens one spreadsheet as the
  * account that deployed it and returns the ban-list columns (Title, Author, ISBN, Banned By, Type,
- * Year of Banning, Memo) as JSON for the CensorSearch page. Nothing else from the sheet is returned.
+ * Year of Banning, Memo) as JSON for the CensorSearch page. Nothing else from the sheet is returned,
+ * except the list's title and its "updated as of" line from above the header row.
  *
- * Read-only by construction: the manifest asks only for the spreadsheets.readonly scope, and this file
- * calls getters only. It writes no cell, sheet, property or Drive file, logs nothing, and keeps nothing
- * between requests unless CACHE_SECONDS is set.
+ * Read-only by construction: this file calls getters only (and the Sheets service's Spreadsheets.get for
+ * the hidden-row flags), and its account should have Viewer access to the sheet. The manifest asks for
+ * the spreadsheets scope because SpreadsheetApp.openById accepts no read-only scope. It writes no cell,
+ * sheet, property or Drive file, logs nothing, and keeps nothing between requests unless CACHE_SECONDS is set.
  *
  * Script properties (Project Settings > Script properties); nothing is configured in this file:
  *   SPREADSHEET_ID  required. The id from the sheet link (…/spreadsheets/d/<this part>/edit), or the whole link.
- *   TABS            optional. Tab ids to serve, comma-separated (the number after gid= in the sheet link),
- *                   e.g. "0" or "0,1111920478". Hidden tabs are served only when listed here.
- *                   Default: every tab that isn't hidden and has a Title header in its top 10 rows.
+ *   TABS            optional; recommended. Tab ids to serve, comma-separated (the number after gid= in the sheet
+ *                   link), e.g. "0" or "0,1111920478". Hidden tabs are served only when listed here.
+ *                   Default: the first tab that isn't hidden (the main tab), and no other.
  *   CACHE_SECONDS   optional. 0 (default) = no cache. 1 to 300 = keep each response in the script cache
  *                   for that many seconds. Only worth setting if the 30-simultaneous-runs quota is ever hit.
  *
@@ -97,7 +99,7 @@ function readConfig_() {
       if (gid == null) invalid = true;
       else if (tabs.indexOf(gid) === -1) tabs.push(gid);
     });
-    if (invalid) {
+    if (invalid || !tabs.length) {
       problems.push({ tab: 'TABS', message: 'TABS in the script properties has an entry that is not a tab id (the number after gid= in the sheet link).' });
     }
   }
@@ -150,15 +152,19 @@ function readSpreadsheet_(config, requested, errors) {
   try {
     spreadsheet = SpreadsheetApp.openById(config.spreadsheetId);
   } catch (err) {
+    if (/permission to call|required permissions/i.test(String(err && err.message))) {
+      throw userError_("The script isn't allowed to open spreadsheets. Replace appsscript.json with the one from CensorSearch (it asks for the Google Sheets permission), save, then deploy a new version and authorize it.");
+    }
     throw userError_("Can't open the spreadsheet. Check SPREADSHEET_ID in the script properties, and that the account running the script can view the sheet.");
   }
   const sheets = spreadsheet.getSheets();
   const byGid = {};
   sheets.forEach(sheet => { byGid[String(sheet.getSheetId())] = sheet; });
 
-  // Allow-list: TABS in its order, else every tab that isn't hidden (its header is checked when read).
-  const allowed = config.tabs || sheets.filter(sheet => !sheet.isSheetHidden()).map(sheet => String(sheet.getSheetId()));
-  const explicit = !!(config.tabs || requested);   // a named tab without a Title header is an error, not a skip
+  // Allow-list: TABS in its order, else only the first tab that isn't hidden (v1 reads the main tab only,
+  // like the link path's "first tab"). No other tab is served unless TABS names it.
+  const firstVisible = sheets.find(sheet => !sheet.isSheetHidden());
+  const allowed = config.tabs || (firstVisible ? [String(firstVisible.getSheetId())] : []);
   const tabs = [];
 
   (requested || allowed).forEach(gid => {
@@ -174,22 +180,22 @@ function readSpreadsheet_(config, requested, errors) {
     let name = 'gid ' + gid;
     try {
       name = String(sheet.getName());
-      const tab = readTab_(sheet, name, gid);
+      const tab = readTab_(sheet, name, gid, config.spreadsheetId);
       if (tab) tabs.push(tab);
-      else if (explicit) errors.push({ tab: name, message: 'No Title column in the first 10 rows of this tab, so it can\'t be searched.' });
+      else errors.push({ tab: name, message: 'No Title column in the first 10 rows of this tab, so it can\'t be searched.' });
     } catch (err) {
       errors.push({ tab: name, message: 'Could not read this tab. Try again in a minute.' });
     }
   });
 
   if (!tabs.length && !errors.length) {
-    errors.push({ tab: '', message: 'No tab has a Title column in its first 10 rows.' });
+    errors.push({ tab: '', message: 'Every tab is hidden. Add the list\'s tab id to TABS in the script properties.' });
   }
   return { format: FORMAT, spreadsheetId: config.spreadsheetId, fetchedAt: new Date().toISOString(), tabs, errors };
 }
 
 /** Reads one tab, or returns null when its top 10 rows have no Title header. */
-function readTab_(sheet, name, gid) {
+function readTab_(sheet, name, gid, spreadsheetId) {
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
   if (lastRow < 1 || lastCol < 1) return null;
@@ -220,6 +226,7 @@ function readTab_(sheet, name, gid) {
     const isbnValues = isbnPos >= 0 ? sheet.getRange(headerRow + 1, mapping.isbn + 1, count, 1).getValues() : null;
     fillMergedCells_(block.getMergedRanges(), headerRow + 1, first + 1, cols, [display, rich, formulas],
       isbnValues, mapping.isbn + 1);
+    const hiddenFlags = hiddenRows_(spreadsheetId, name, headerRow + 1, count);
 
     for (let i = 0; i < count; i++) {
       const values = cols.map(c => cellText_(display[i][c - first]));
@@ -237,10 +244,9 @@ function readTab_(sheet, name, gid) {
         const url = linkFromRichText_(rich[i][c - first]) || linkFromFormula_(formulas[i][c - first]);
         if (url) links[String(k)] = url;
       });
-      // Two calls per listed row (empty rows are skipped first): the slowest part of a read (README, "Limits").
-      const hidden = sheet.isRowHiddenByUser(rowNumber) || sheet.isRowHiddenByFilter(rowNumber);
+      const hidden = hiddenFlags ? hiddenFlags[i] : null;
 
-      rows.push({ row: rowNumber, values, raw, links, hidden: hidden === true });
+      rows.push({ row: rowNumber, values, raw, links, hidden });
     }
   }
 
@@ -249,12 +255,54 @@ function readTab_(sheet, name, gid) {
     gid,
     hiddenTab: sheet.isSheetHidden() === true,
     headerRow,
-    above: top.slice(0, headerIndex).map(cells => cells.map(cellText_).filter(v => !isBlank_(v))),
+    above: aboveHeader_(top.slice(0, headerIndex)),
     headers: cols.map(c => headerCells[c]),
     columns: cols.map(columnLetter_),
     lastColumn: columnLetter_(lastTableCol),
     rows,
   };
+}
+
+/**
+ * The rows above the header, keeping only the two cells the page uses: the first cell mentioning "updated"
+ * (the "updated as of" line) and the first other non-empty cell (the list's title), in their own rows. The
+ * page picks them the same way (src/sheet.js). Anything else there, such as a note beside the title, stays in the sheet.
+ */
+function aboveHeader_(rows) {
+  let updated = null;
+  let banner = null;
+  rows.forEach((cells, r) => cells.forEach((cell, c) => {
+    if (isBlank_(cell)) return;
+    if (updated == null && /updated/i.test(cellText_(cell))) updated = r + ':' + c;
+    else if (banner == null) banner = r + ':' + c;
+  }));
+  return rows.map((cells, r) => cells.map(cellText_).filter((v, c) => r + ':' + c === updated || r + ':' + c === banner));
+}
+
+/**
+ * Hidden flags (by a user or by the sheet's filter) for `count` rows from `firstRow`, in one Sheets API call
+ * rather than two SpreadsheetApp calls per row. Returns null ("can't tell"; the page then shows no hidden label)
+ * if the Sheets service is off or the call fails, for example over its per-minute read limit; a row the answer
+ * doesn't cover is null too. The list itself still loads either way.
+ */
+function hiddenRows_(spreadsheetId, name, firstRow, count) {
+  try {
+    const range = "'" + name.replace(/'/g, "''") + "'!A" + firstRow + ':A' + (firstRow + count - 1);
+    const res = Sheets.Spreadsheets.get(spreadsheetId, {
+      ranges: [range],
+      fields: 'sheets(data(startRow,rowMetadata(hiddenByUser,hiddenByFilter)))',
+    });
+    const data = res.sheets[0].data[0];
+    if ((data.startRow || 0) !== firstRow - 1) return null;   // 0-based, and left out when 0
+    const meta = data.rowMetadata || [];
+    const flags = [];
+    for (let i = 0; i < count; i++) {
+      flags.push(meta[i] ? meta[i].hiddenByUser === true || meta[i].hiddenByFilter === true : null);
+    }
+    return flags;
+  } catch (err) {
+    return null;
+  }
 }
 
 /**
@@ -331,14 +379,19 @@ function columnLetter_(index) {
   return s;
 }
 
-/** Exact ISBN as digits (and a final X): numbers via toFixed(0), text with spaces, hyphens and an "ISBN" label removed. */
+/**
+ * Exact ISBN as digits (and a final X): numbers via toFixed(0), text with spaces, hyphens and an "ISBN" label removed.
+ * Only one whole ISBN (9 digits with a lost leading 0, 10 with a final digit or X, or 13) is returned. Anything else,
+ * such as two ISBNs on two lines, gives '' so the page reads the displayed cell, which it splits into each ISBN.
+ */
 function isbnRawText_(value) {
+  let s = '';
   if (typeof value === 'number') {
-    return Number.isInteger(value) && value >= 0 && value < 1e21 ? value.toFixed(0) : '';
+    s = Number.isInteger(value) && value >= 0 && value < 1e21 ? value.toFixed(0) : '';
+  } else if (typeof value === 'string') {
+    s = value.replace(/[\s ‐-―-]+/g, '').toUpperCase().replace(/^ISBN(?:1[03])?:?/, '');
   }
-  if (typeof value !== 'string') return '';
-  const s = value.replace(/[\s ‐-―-]+/g, '').toUpperCase().replace(/^ISBN(?:1[03])?:?/, '');
-  return /^\d+X?$/.test(s) ? s : '';
+  return /^(?:\d{9}|\d{9}[\dX]|\d{13})$/.test(s) ? s : '';
 }
 
 /** A link on the whole cell, else the first https link on part of its text. */
