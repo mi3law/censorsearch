@@ -75,7 +75,7 @@ a { color: var(--link); text-underline-offset: 2px; }
 a:visited { color: var(--link-visited); }
 
 :focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
-.card:focus, .notice:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
+.card:focus, .notice:focus, .status-line:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
 
 mark {
   background: var(--mark-bg);
@@ -106,6 +106,18 @@ button:disabled { opacity: .6; cursor: default; }
   clip-path: inset(50%);
   white-space: nowrap;
 }
+
+/* Not the page's usual list (?sheet= or an unknown ?script=) */
+.override-note {
+  border: 2px solid var(--warn-border);
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border-radius: 8px;
+  padding: .6rem .8rem;
+  margin: 0 0 1rem;
+  overflow-wrap: anywhere;
+}
+.override-note a { color: inherit; }
 
 /* Search box */
 .search { margin: 0 0 1rem; }
@@ -227,6 +239,7 @@ button:disabled { opacity: .6; cursor: default; }
 .no-results p, .no-results ul { margin: .3rem 0; }
 .no-results ul { padding-left: 1.2rem; }
 .no-results-head { font-size: 1.05rem; }
+.no-results .unloaded { font-weight: 600; }
 
 /* Maintainer notes and footer */
 .maintainer-notes { margin: 2rem 0 1rem; font-size: .9375rem; }

@@ -97,20 +97,24 @@
   }
 
   const gidOr0 = gid => (gid != null && GID_RE.test(str(gid)) ? str(gid) : '0');
+  // '' stands for "the first tab, id unknown" (a link without a gid): Google exports the first tab when gid is left out.
+  const gidOrFirst = gid => (gid != null && GID_RE.test(str(gid)) ? str(gid) : '');
   const base = id => 'https://docs.google.com/spreadsheets/d/' + encodeURIComponent(str(id));
 
   function csvUrl(id, gid) {
-    return base(id) + '/export?format=csv&gid=' + gidOr0(gid);
+    const g = gidOrFirst(gid);
+    return base(id) + '/export?format=csv' + (g ? '&gid=' + g : '');
   }
 
   function sheetUrl(id, gid) {
-    if (gid == null) return base(id) + '/edit';
-    const g = gidOr0(gid);
-    return base(id) + '/edit?gid=' + g + '#gid=' + g;
+    const g = gidOrFirst(gid);
+    return g ? base(id) + '/edit?gid=' + g + '#gid=' + g : base(id) + '/edit';
   }
 
+  // Google ignores a range without a gid, so a row of a tab whose id is unknown links to the sheet itself.
   function rowUrl(id, gid, row, lastCol) {
-    const g = gidOr0(gid);
+    const g = gidOrFirst(gid);
+    if (!g) return base(id) + '/edit';
     const col = COL_RE.test(str(lastCol)) ? str(lastCol) : 'G';
     const r = Math.max(1, Math.floor(Number(row)) || 1);
     return base(id) + '/edit?gid=' + g + '#gid=' + g + '&range=A' + r + ':' + col + r;
@@ -191,7 +195,7 @@
     const records = (grid || []).map((cells, i) => ({
       row: i + 1, cells: (cells || []).map(str), hidden: null, links: {}, isbnRaw: {},
     }));
-    return { tab: str(o.tab) || 'Sheet', gid: gidOr0(o.gid), sheetId: str(o.sheetId), records, hiddenKnown: false };
+    return { tab: str(o.tab) || 'Sheet', gid: gidOrFirst(o.gid), sheetId: str(o.sheetId), records, hiddenKnown: false };
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -245,7 +249,15 @@
   const BB_PLACEHOLDER = /^(?:-+|—|–|\?+|n\/?a|none|unknown|tbd|tbc)$/i;
 
   const foldCode = s => str(s).normalize('NFKC').toLowerCase().replace(/[.'’]/g, '').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-  const isMinistryWord = w => w === 'moe' || (w.length >= 7 && w.length <= 9 && osa(w, 'ministry', 1) <= 1);
+  // "When in doubt, show the more severe status": one edit of "ministry" (two for 8+ letters), any word starting
+  // "minist" (Ministries, Minister), MOE (also spelled out "M O E"), and a dotted abbreviation such as "Min.".
+  const isMinistryWord = w => {
+    if (w === 'moe' || w.startsWith('minist')) return true;
+    const k = w.length >= 8 ? 2 : 1;
+    return w.length >= 7 && w.length <= 10 && osa(w, 'ministry', k) <= k;
+  };
+  const isMinistryPart = (raw, folded, words) => isMinistryWord(folded) || words.some(isMinistryWord) ||
+    /^min(?:s|is|ist)?\.$/i.test(raw) || (words.length === 3 && words.every(w => w.length === 1) && words.join('') === 'moe');
 
   function parseBannedBy(text, opts) {
     const schoolCode = opts && opts.schoolCode != null ? str(opts.schoolCode).trim() : 'UAS';
@@ -260,7 +272,7 @@
     for (const p of parts) {
       const f = foldCode(p), words = f.split(' ').filter(Boolean);
       let code;
-      if (isMinistryWord(f) || words.some(isMinistryWord)) { code = 'Ministry'; ministry = true; }
+      if (isMinistryPart(p, f, words)) { code = 'Ministry'; ministry = true; }
       else if (school && (f === school || words.includes(school))) { code = schoolCode; isSchool = true; }
       else code = /^\p{L}{1,6}$/u.test(p) ? p.toUpperCase() : p;
       const key = code.toLowerCase();
@@ -281,12 +293,18 @@
   }
 
   const PASTE_RESIDUE = /\+[0-9A-Za-z:]*:[0-9A-Za-z:]*\s*$/;
+  const HEADING_TEXT = new RegExp([
+    '\\b(?:19|20)\\d{2}\\s*[-–—/]\\s*(?:19|20)?\\d{2}\\b',                               // 2024-2025, 2024/25
+    '\\b(?:additions?|added|section|continued)\\b',
+    '\\b(?:older|newer|new|other|earlier|later|more)\\s+(?:items|titles|books|materials|listings)\\b',
+    ':\\s*$',
+  ].join('|'), 'i');
   const ISBN_SCIENTIFIC = /^\s*[0-9](?:[.,][0-9]+)?e\+?[0-9]+\s*$/i;
 
   function extractRows(table, opts) {
     const schoolCode = opts && opts.schoolCode != null ? opts.schoolCode : 'UAS';
     const t = table || {};
-    const tab = str(t.tab) || 'Sheet', gid = gidOr0(t.gid), sheetId = str(t.sheetId);
+    const tab = str(t.tab) || 'Sheet', gid = gidOrFirst(t.gid), sheetId = str(t.sheetId);
     const records = Array.isArray(t.records) ? t.records : [];
     const issues = [];
     const issue = (row, kind, message) => issues.push({ tab, row, kind, message });
@@ -339,12 +357,16 @@
     }
     const withBannedBy = mapping.bannedBy >= 0 ? candidates.filter(r => !isBlank(cell(r, mapping.bannedBy))).length : 0;
     const headingsPossible = mapping.bannedBy >= 0 && withBannedBy * 2 > candidates.length;
+    // A heading is a row with only Title filled that also reads like one: its text repeated across the row (a merged
+    // heading on the Apps Script path), a year range, words like "additions", or a closing colon. Any other title-only
+    // row stays an item, with "Status not stated": CSV can't see merged cells, and a missed item is worse than an extra one.
     const isHeading = rec => {
       const title = cell(rec, mapping.title);
       if (isBlank(title)) return false;
       const tt = title.trim();
-      // Only Title is filled (a merged heading may repeat its text across the row on the Apps Script path).
-      return tableCols.every(i => i === mapping.title || isBlank(cell(rec, i)) || cell(rec, i).trim() === tt);
+      const others = tableCols.filter(i => i !== mapping.title && !isBlank(cell(rec, i)));
+      if (!others.every(i => cell(rec, i).trim() === tt)) return false;
+      return others.length > 0 || HEADING_TEXT.test(tt);
     };
 
     const rows = [];
@@ -368,7 +390,7 @@
       const row = {
         id: null, tab, gid, sheetId, row: rec.row,
         title: v.title, author: v.author, isbn: v.isbn, bannedBy: v.bannedBy, type: v.type, year: v.year, memo: v.memo,
-        isbnRaw: /^[0-9Xx]+$/.test(isbnRawVal) ? isbnRawVal : '',
+        isbnRaw: /^(?:\d{9}|\d{9}[0-9Xx]|\d{13})$/.test(isbnRawVal) ? isbnRawVal : '',   // one complete ISBN only; else the cell text is parsed
         memoUrl: mapping.memo >= 0 ? safeHttpsUrl(links[mapping.memo]) : null,
         titleUrl: safeHttpsUrl(links[mapping.title]),
         hidden: typeof rec.hidden === 'boolean' ? rec.hidden : null,
@@ -512,27 +534,48 @@
     return Object.assign({ rows, tabs, issues }, extra);
   }
 
+  const dispositionOf = res => (res && res.headers && res.headers.get ? res.headers.get('content-disposition') : null);
+
+  // The name of the tab Google exports for gid (headers only; the body is dropped), or null.
+  async function exportedTabName(fetchFn, sheetId, gid, timeoutMs) {
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    const timer = ctrl && timeoutMs > 0 ? setTimeout(() => ctrl.abort(), timeoutMs) : null;
+    try {
+      const res = await fetchFn(csvUrl(sheetId, gid), Object.assign({}, FETCH_OPTS, ctrl ? { signal: ctrl.signal } : {}));
+      try { if (res && res.body && typeof res.body.cancel === 'function') res.body.cancel().catch(() => {}); } catch (e) { /* ignore */ }
+      return res && res.ok ? tabNameFromDisposition(dispositionOf(res)) : null;
+    } catch (e) {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   async function loadCsv(source, fetchFn, schoolCode, timeoutMs) {
     const sheetId = str(source.sheetId);
-    const tabs = Array.isArray(source.tabs) && source.tabs.length ? source.tabs : [{ gid: '0', name: null }];
+    const tabs = Array.isArray(source.tabs) && source.tabs.length ? source.tabs : [{ gid: null, name: null }];
     if (!SHEET_ID_RE.test(sheetId)) {
       return { parts: [], errors: [{ tab: null, message: MSG.badSheetId, kind: 'format' }], sheetId };
     }
     const msgs = { network: MSG.csvNetwork, html: MSG.csvHtml, what: 'sheet or tab' };
     const results = await Promise.all(tabs.map(async t => {
-      const gid = gidOr0(t && t.gid);
+      let gid = gidOrFirst(t && t.gid);
       const configured = t && t.name ? str(t.name) : null;
+      // No gid: read the first tab (the export without a gid). Its id isn't in the reply, so ask for gid 0 alongside:
+      // when Google names the same tab, row links can use gid 0; otherwise they open the sheet without a row.
+      const gid0Name = gid ? null : exportedTabName(fetchFn, sheetId, '0', timeoutMs);
       try {
         const { res, body } = await fetchText(fetchFn, csvUrl(sheetId, gid), timeoutMs, msgs);
-        const disp = res.headers && res.headers.get ? res.headers.get('content-disposition') : null;
-        const tab = configured || tabNameFromDisposition(disp) || 'Sheet';
+        const named = tabNameFromDisposition(dispositionOf(res));
+        if (!gid && named && named === await gid0Name) gid = '0';
+        const tab = configured || named || 'Sheet';
         try {
           return { part: extractRows(tableFromCsv(parseCsv(body), { tab, gid, sheetId }), { schoolCode }) };
         } catch (e) {
           return { error: { tab, message: e.kind ? e.message : MSG.noHeader, kind: 'format' } };
         }
       } catch (e) {
-        return { error: { tab: configured || 'gid ' + gid, message: e.message, kind: e.kind || 'network' } };
+        return { error: { tab: configured || (gid ? 'gid ' + gid : 'the first tab'), message: e.message, kind: e.kind || 'network' } };
       }
     }));
     return { parts: results.map(r => r.part), errors: results.filter(r => r.error).map(r => r.error), sheetId };

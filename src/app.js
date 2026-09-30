@@ -10,13 +10,14 @@
   const Sheet = window.CensorSheet;
   const Engine = window.CensorEngine;
   const cfg = Object.assign(
-    { sheetUrl: '', tabs: [], scriptUrl: '', schoolCode: 'UAS', aliasesUrl: 'aliases.json', repoUrl: '' },
+    { sheetUrl: '', tabs: [], scriptUrl: '', trustedScripts: [], schoolCode: 'UAS', aliasesUrl: 'aliases.json', repoUrl: '' },
     window.CENSORSEARCH_CONFIG || {}
   );
 
   const LIMITS = { main: 50, possible: 25, isbnPrefix: 25 };
   const MINUTE = 60 * 1000;
   const REFRESH_AFTER = 5 * MINUTE;      // silent refresh while visible, and re-check a row before opening it
+  const ALIASES_TIMEOUT = 5000;          // the optional alias list never holds up the sheet
   const RELOAD_AFTER = 30 * MINUTE;      // reload on focus / returning to the tab
   const LONG_QUERY = 300;                // characters: above this, search after 400 ms or on Enter
   const DELAY = 150, LONG_DELAY = 400;
@@ -27,6 +28,7 @@
     truncated: 'Long text: matched on its first 12 main words.',
     noListing: 'No listing found. This does not mean the item is permitted.',
     network: "Can't read this sheet: it may not be shared by link, or a network filter may block Google.",
+    semicolon: "Semicolons don't split a search yet: everything in the box was searched together. To check several titles, put each on its own line.",
     isbnFallback: 'No ISBN match. Most rows have no ISBN, so search the title and author.',
     filterNote: "Extend the sheet's filter to cover the Memo column (A:G) so sorting keeps memos beside their titles.",
   };
@@ -34,7 +36,7 @@
 
   const $ = id => document.getElementById(id);
   const ui = {
-    box: $('q'), form: $('search-form'),
+    box: $('q'), form: $('search-form'), override: $('override-note'),
     status: $('status'), warning: $('status-warning'), actions: $('status-actions'), source: $('source'),
     filterBox: $('filter-box'), filterSummary: $('filter-summary'), filterCodes: $('filter-codes'),
     filterAll: $('filter-all'), filterNone: $('filter-none'),
@@ -45,7 +47,9 @@
 
   const state = {
     source: null,          // what CensorSheet.load reads
-    overridden: false,     // ?sheet= or ?script= in the page address
+    overridden: false,     // ?sheet= or ?script= in the page address (a ?script= of this page's own script doesn't count)
+    untrusted: false,      // ?script= to a script this page doesn't know: no sheet or row links from its claims
+    scriptDigest: '',      // SHA-256 of that script's address, for config.trustedScripts
     phase: 'loading',      // 'config' | 'loading' | 'loaded' | 'partial' | 'failed'
     configError: '',
     failure: null,         // { errors, sheetId } when nothing loaded
@@ -62,9 +66,12 @@
     debounce: 0,
     expanded: new Set(), expandedFor: null,
     sectionEls: new Map(), // expansion key -> section element (for focus after "Show all")
-    moves: new Map(),      // gid + fp + newRow -> { from, to }
+    moves: new Map(),      // new row -> { from, to } for rows on screen when the data changed
+    rowPairs: null,        // old row -> the same row in the data loaded after it (see pairRows)
     shown: [],             // rows rendered by the last render (for row-move detection)
+    cardEls: [],           // [{ el, row }] cards rendered by the last render
     linkRows: [],          // [{ el, row }] row links rendered by the last render
+    codeCounts: new Map(), // code -> the count element beside its checkbox
   };
   const linkRow = new WeakMap();
 
@@ -118,7 +125,7 @@
   const plural = (n, one, many) => fmtInt(n) + ' ' + (n === 1 ? one : many);
   const arr = v => (Array.isArray(v) ? v : []);
   const str = v => (v == null ? '' : String(v));
-  const sentence = s => { const t = str(s).trim(); return !t || /[.!?…]$/.test(t) ? t : t + '.'; };
+  const sentence = s => { const t = str(s).trim(); return !t || /[.!?…]["”’)]*$/.test(t) ? t : t + '.'; };
   const stripStop = s => str(s).trim().replace(/[.]+$/, '');
   const lcFirstUpdated = s => str(s).trim().replace(/^Updated\b/, 'updated');
   const foldCodes = s => str(s).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
@@ -131,11 +138,9 @@
     return items.slice(0, -1).join(', ') + ' and ' + items[items.length - 1];
   }
 
-  function nearest(rowNumbers, target) {
-    let best = null;
-    for (const n of rowNumbers) if (best == null || Math.abs(n - target) < Math.abs(best - target)) best = n;
-    return best;
-  }
+  const isFocusLost = () => { const a = document.activeElement; return !a || a === document.body || !a.isConnected; };
+  const within = (node, root) => { for (let n = node; n; n = n.parentNode) if (n === root) return true; return false; };
+  const shortId = id => (str(id).length > 12 ? str(id).slice(0, 6) + '…' + str(id).slice(-4) : str(id));
 
   // Appends text to parent with <mark> around the given [start, end) ranges (sorted, merged, clamped).
   function appendHighlighted(parent, text, ranges) {
@@ -163,11 +168,16 @@
   // ---------------------------------------------------------------------------------------------
   // Source selection: ?script= > ?sheet= > config.scriptUrl > config.sheetUrl + config.tabs
 
+  // A gid of null means the sheet's first tab (the link had none).
   function chooseSource() {
     const params = new URLSearchParams(location.search);
+    const ownScript = cfg.scriptUrl ? Sheet.parseScriptUrl(String(cfg.scriptUrl)) : null;
+    // The page's own script reads the sheet that config.sheetUrl names: link to it even when the script can't be reached.
+    const ownSheet = () => { const p = Sheet.parseSheetUrl(String(cfg.sheetUrl || '')); return p ? { sheetId: p.id, sheetGid: p.gid } : {}; };
     if (params.has('script')) {
       const url = Sheet.parseScriptUrl(params.get('script') || '');
       if (!url) return { error: "This page's address asks to read an Apps Script link that isn't an Apps Script web app link (https://script.google.com/macros/s/…/exec), so there is nothing to search.", overridden: true };
+      if (url === ownScript) return { source: Object.assign({ kind: 'script', url, tabs: null }, ownSheet()), overridden: false };
       return { source: { kind: 'script', url, tabs: null }, overridden: true };
     }
     if (params.has('sheet')) {
@@ -175,18 +185,35 @@
       if (!p) return { error: "This page's address asks to read a sheet link that isn't a Google Sheets link (https://docs.google.com/spreadsheets/d/…), so there is nothing to search.", overridden: true };
       // A pasted link's own #gid=… or &gid=… can end up in this page's address instead of inside ?sheet=.
       const pageGid = params.get('gid') || new URLSearchParams(location.hash.replace(/^#/, '')).get('gid');
-      const gid = p.gid || (/^\d{1,12}$/.test(pageGid || '') ? pageGid : '0');
+      const gid = p.gid || (/^\d{1,12}$/.test(pageGid || '') ? pageGid : null);
       return { source: { kind: 'csv', sheetId: p.id, tabs: [{ gid, name: null }] }, overridden: true };
     }
     if (cfg.scriptUrl) {
-      const url = Sheet.parseScriptUrl(String(cfg.scriptUrl));
-      if (!url) return { error: 'The scriptUrl in config.js is not an Apps Script web app link (https://script.google.com/macros/s/…/exec).' };
-      return { source: { kind: 'script', url, tabs: null }, overridden: false };
+      if (!ownScript) return { error: 'The scriptUrl in config.js is not an Apps Script web app link (https://script.google.com/macros/s/…/exec).' };
+      return { source: Object.assign({ kind: 'script', url: ownScript, tabs: null }, ownSheet()), overridden: false };
     }
     const p = Sheet.parseSheetUrl(String(cfg.sheetUrl || ''));
     if (!p) return { error: 'The sheetUrl in config.js is not a Google Sheets link.' };
     const tabs = arr(cfg.tabs).filter(t => t && t.gid != null).map(t => ({ gid: String(t.gid), name: t.name ? String(t.name) : null }));
-    return { source: { kind: 'csv', sheetId: p.id, tabs: tabs.length ? tabs : [{ gid: p.gid || '0', name: null }] }, overridden: false };
+    return { source: { kind: 'csv', sheetId: p.id, tabs: tabs.length ? tabs : [{ gid: p.gid, name: null }] }, overridden: false };
+  }
+
+  // SHA-256 (hex) of a script address. config.trustedScripts lists these for the school's own ?script= links, so the
+  // page can recognise them without the address itself appearing in the public code.
+  async function scriptDigest(url) {
+    try {
+      const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(url));
+      return Array.from(new Uint8Array(buf), b => b.toString(16).padStart(2, '0')).join('');
+    } catch (e) {
+      return '';
+    }
+  }
+
+  function isTrustedScript(url, digest) {
+    return arr(cfg.trustedScripts).some(t => {
+      const v = str(t).trim();
+      return (digest && v.toLowerCase() === digest) || Sheet.parseScriptUrl(v) === url;
+    });
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -194,17 +221,24 @@
 
   async function loadAliases() {
     if (!cfg.aliasesUrl) return null;
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    let timer = 0;
+    const timeout = new Promise((resolve, reject) => {
+      timer = setTimeout(() => { if (ctrl) ctrl.abort(); reject(new Error('no answer in ' + ALIASES_TIMEOUT / 1000 + ' s')); }, ALIASES_TIMEOUT);
+    });
     try {
       const url = new URL(String(cfg.aliasesUrl), location.href);
       if (url.origin !== location.origin) throw new Error('aliasesUrl must be on the same site as the page');
-      const res = await fetch(url.href, { cache: 'no-store', credentials: 'same-origin' });
+      const res = await Promise.race([fetch(url.href, { cache: 'no-store', credentials: 'same-origin', signal: ctrl ? ctrl.signal : undefined }), timeout]);
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      const json = await res.json();
+      const json = await Promise.race([res.json(), timeout]);
       if (!json || !Array.isArray(json.aliases)) throw new Error('no "aliases" list');
       return json;
     } catch (e) {
       console.warn('CensorSearch: continuing without aliases (' + (e && e.message ? e.message : e) + ')');
       return null;
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -229,7 +263,6 @@
   }
 
   async function doLoad(background) {
-    const before = state.shown.map(r => ({ gid: str(r.gid), fp: fpOf(r), row: r.row }));
     let result;
     try {
       result = await Sheet.load(state.source, { fetch: window.fetch.bind(window), schoolCode: cfg.schoolCode });
@@ -241,10 +274,16 @@
     state.manualRetry = false;
     const rows = arr(result && result.rows);
     const tabs = arr(result && result.tabs);
-    const errors = arr(result && result.errors);
+    let errors = arr(result && result.errors);
     const issues = arr(result && result.issues);
     const fetchedAt = result && result.fetchedAt instanceof Date && !isNaN(result.fetchedAt) ? result.fetchedAt : new Date();
-    const sheetId = (result && result.sheetId) || state.source.sheetId || null;
+    let sheetId = (result && result.sheetId) || state.source.sheetId || null;
+    if (state.untrusted) {
+      // A script this page doesn't know can claim any spreadsheet id: never turn that claim into a link, and quote its words.
+      sheetId = null;
+      for (const r of rows) r.sheetId = '';
+      errors = errors.map(e => (e.kind === 'script' ? Object.assign({}, e, { message: 'The script says: “' + sentence(e.message) + '”' }) : e));
+    }
 
     if (background) {
       // Keep the old data unless every tab it had loaded again.
@@ -287,58 +326,116 @@
       return false;
     }
 
+    // The rows on screen now (not when the fetch started) get the "moved" notes; the pairing also serves the click re-check.
+    const focus = focusKey();
+    state.rowPairs = pairRows(state.data ? state.data.rows : [], rows);
+    state.moves = new Map();
+    for (const old of state.shown) {
+      const now = state.rowPairs.get(old);
+      if (now && now.row !== old.row) state.moves.set(now, { from: old.row, to: now.row });
+    }
     state.data = { rows, tabs, errors, issues, fetchedAt, sheetId, signature };
     state.index = index;
     state.phase = errors.length ? 'partial' : 'loaded';
     state.refreshError = null;
     state.failure = null;
-    computeMoves(before, rows);
+    clearNotice();   // a "Checked again: now at row N" notice may no longer be true
     rebuildFilter();
     renderStatus(); renderSource(); renderNotes();
-    if (ui.box.value.trim()) runSearch(state.enter, { keepNotice: true });
+    if (ui.box.value.trim()) runSearch(state.enter);
     else { state.run = null; renderResults(); }
+    restoreFocus(focus);
     return true;
   }
 
-  // Notes "moved from row 7 to 8" for rows shown before this reload that now sit at another row of the same tab.
-  function computeMoves(before, rows) {
-    const byKey = new Map();
-    for (const r of rows) {
-      const k = str(r.gid) + '\u0000' + fpOf(r);
-      if (!byKey.has(k)) byKey.set(k, []);
-      byKey.get(k).push(r.row);
+  // Pairs each old row with the same row in the new data: same tab and fingerprint, and rows sharing a fingerprint
+  // pair up in order (the k-th old one with the k-th new one), so two identical listings never claim the same new row.
+  // When a copy was added or removed, each old row takes the nearest new row not already taken.
+  function pairRows(oldRows, newRows) {
+    const group = rows => {
+      const m = new Map();
+      for (const r of rows) {
+        const k = str(r.gid) + '\u0000' + fpOf(r);
+        if (!m.has(k)) m.set(k, []);
+        m.get(k).push(r);
+      }
+      return m;
+    };
+    const next = group(newRows), pairs = new Map();
+    for (const [k, olds] of group(oldRows)) {
+      const free = (next.get(k) || []).slice();
+      if (!free.length) continue;
+      if (free.length === olds.length) { olds.forEach((r, i) => pairs.set(r, free[i])); continue; }
+      for (const r of olds) {
+        if (!free.length) break;
+        let best = 0;
+        free.forEach((n, i) => { if (Math.abs(n.row - r.row) < Math.abs(free[best].row - r.row)) best = i; });
+        pairs.set(r, free.splice(best, 1)[0]);
+      }
     }
-    const moves = new Map();
-    for (const b of before) {
-      const cands = byKey.get(b.gid + '\u0000' + b.fp);
-      if (!cands || cands.includes(b.row)) continue;
-      const to = nearest(cands, b.row);
-      moves.set(b.gid + '\u0000' + b.fp + '\u0000' + to, { from: b.row, to });
-    }
-    state.moves = moves;
+    return pairs;
   }
 
   function moveOf(row) {
-    return state.moves.get(str(row.gid) + '\u0000' + fpOf(row) + '\u0000' + row.row) || null;
+    return state.moves.get(row) || null;
+  }
+
+  // Keyboard focus across a refresh that rebuilds the results: remember the focused card (or its row link), results
+  // button or filter checkbox, and put focus back on the same one afterwards if the rebuild dropped it.
+  function focusKey() {
+    const a = document.activeElement;
+    if (!a || a === document.body) return null;
+    for (const [code, input] of state.codeInputs) if (input === a) return { kind: 'code', code };
+    if (!within(a, ui.results)) return null;
+    const c = state.cardEls.find(x => x.el === a || within(a, x.el));
+    if (c) {
+      const same = state.cardEls.filter(x => x.row === c.row);
+      return { kind: 'card', row: c.row, index: same.indexOf(c), link: a !== c.el && a.matches('a.row-link') };
+    }
+    return a.tagName === 'BUTTON' ? { kind: 'button', text: a.textContent } : null;
+  }
+
+  function restoreFocus(key) {
+    if (!key || !isFocusLost()) return;
+    let target = null;
+    if (key.kind === 'code') target = state.codeInputs.get(key.code) || null;
+    else if (key.kind === 'card') {
+      const row = (state.rowPairs && state.rowPairs.get(key.row)) || key.row;
+      const same = state.cardEls.filter(x => x.row === row);
+      const c = same[key.index] || same[0];
+      if (c) target = (key.link && c.el.querySelector('a.row-link')) || c.el;
+    } else target = Array.from(ui.results.querySelectorAll('button')).find(b => b.textContent === key.text) || null;
+    if (target) target.focus();
   }
 
   // ---------------------------------------------------------------------------------------------
   // Status line, source line, maintainer notes
 
+  // Re-rendering the status replaces this button; keyboard focus then moves to the new Retry button, or to the
+  // status line once the list has loaded.
   function retryButton() {
     const b = el('button', { type: 'button' }, 'Retry');
     b.addEventListener('click', () => {
+      const hadFocus = document.activeElement === b;
       b.disabled = true;
-      reload(state.data ? { background: true, manual: true } : {});
+      const done = reload(state.data ? { background: true, manual: true } : {});
+      if (hadFocus) {
+        done.then(() => {
+          if (!isFocusLost()) return;
+          const again = ui.actions.hidden ? null : ui.actions.querySelector('button');
+          (again || ui.status).focus();
+        });
+      }
     });
     return b;
   }
 
   function sheetLinkUrl() {
+    if (state.untrusted) return null;
     const sheetId = (state.data && state.data.sheetId) || (state.failure && state.failure.sheetId) || (state.source && state.source.sheetId);
     if (!sheetId) return null;
     const tabs = state.data && state.data.tabs.length ? state.data.tabs : arr(state.source && state.source.tabs);
-    return Sheet.sheetUrl(sheetId, tabs.length ? tabs[0].gid : null);
+    return Sheet.sheetUrl(sheetId, tabs.length ? tabs[0].gid : state.source && state.source.sheetGid);
   }
 
   function tabRowCount(gid) {
@@ -414,11 +511,17 @@
       : arr(s.tabs).map(t => t.name).filter(Boolean);
     const url = sheetLinkUrl();
     ui.source.append('Reading ');
-    if (tabs.length) ui.source.append(listText(tabs), ' of ');
-    ui.source.append(url ? extLink(url, 'this Google Sheet') : 'the Google Sheet');
-    if (s.kind === 'script') ui.source.append(' through its Apps Script web app');
+    if (state.untrusted) {
+      if (tabs.length) ui.source.append(listText(tabs), ' ');
+      ui.source.append("through an Apps Script web app this page doesn't know");
+    } else {
+      if (tabs.length) ui.source.append(listText(tabs), ' of ');
+      ui.source.append(url ? extLink(url, 'this Google Sheet') : 'the Google Sheet');
+      if (s.kind === 'script') ui.source.append(' through its Apps Script web app');
+    }
     if (state.overridden) ui.source.append(", as this page's address asks. ", defaultPageLink('Use the default list'), '.');
     else ui.source.append('.');
+    renderOverride();
 
     if (url) {
       ui.footerSheet.href = url;
@@ -426,6 +529,29 @@
       ui.footerSheet.rel = 'noopener noreferrer';
       ui.footerSheet.hidden = false;
     } else ui.footerSheet.hidden = true;
+  }
+
+  // A warning above the search box whenever the page isn't showing its usual list, naming what it shows instead.
+  function renderOverride() {
+    const box = ui.override;
+    if (!box) return;
+    box.replaceChildren();
+    const s = state.source;
+    const own = Sheet.parseSheetUrl(String(cfg.sheetUrl || ''));
+    // Another tab of the page's own spreadsheet is still its usual list.
+    box.hidden = !state.overridden || !s || (s.kind === 'csv' && !!own && own.id === s.sheetId);
+    if (box.hidden) return;
+    if (s.kind === 'script') {
+      const id = (str(s.url).match(/\/s\/([^/]+)\/exec$/) || [])[1] || '';
+      box.append(el('strong', null, "This page is reading a list through an Apps Script web app, not this page's usual list"),
+        ' (deployment ' + id + '). It may not match the school\'s list, and its rows get no links because the sheet behind the script can\'t be checked. ');
+    } else {
+      const tab = state.data && state.data.tabs[0];
+      const title = tab && str(tab.bannerTitle).trim();
+      box.append(el('strong', null, 'This page is showing another sheet, not its usual list'),
+        (title ? ': “' + title + '”' : '') + ' (sheet ' + shortId(s.sheetId) + '). ');
+    }
+    box.append(defaultPageLink('Use the default list'), '.');
   }
 
   function renderNotes() {
@@ -436,33 +562,48 @@
       ui.notesList.append(el('li', null, where + ': ' + str(i.message)));
     }
     ui.notesList.append(el('li', null, TEXT.filterNote));
-    ui.notesSummary.textContent = "Notes for the list's maintainers (" + (issues.length + 1) + ')';
+    let n = issues.length + 1;
+    if (state.untrusted && state.scriptDigest) {
+      ui.notesList.append(el('li', null, "This page's address names an Apps Script web app that config.js doesn't list, so the page marks it as not its usual list and shows no sheet or row links. If it is the school's own script, add \"" +
+        state.scriptDigest + '" to trustedScripts in config.js (this code stands for the script\'s address without revealing it).'));
+      n++;
+    }
+    ui.notesSummary.textContent = "Notes for the list's maintainers (" + n + ')';
     ui.notes.hidden = !state.data;
   }
 
   // ---------------------------------------------------------------------------------------------
   // Banned By filter
 
+  // Keeps the checkboxes (and so keyboard focus on one) when a refresh brings the same codes; only the counts change.
   function rebuildFilter() {
     const counts = new Map();
     for (const r of state.data.rows) for (const c of codesOf(r)) counts.set(c, (counts.get(c) || 0) + 1);
-    state.codes = [...counts.keys()].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }) || (a < b ? -1 : a > b ? 1 : 0));
+    const codes = [...counts.keys()].sort((a, b) => a.localeCompare(b, 'en', { sensitivity: 'base' }) || (a < b ? -1 : a > b ? 1 : 0));
     for (const c of [...state.unticked]) if (!counts.has(c)) state.unticked.delete(c);
-    ui.filterCodes.replaceChildren();
-    state.codeInputs = new Map();
-    state.codes.forEach((code, i) => {
-      const id = 'code-' + i;
-      const input = el('input', { type: 'checkbox', id });
-      input.checked = !state.unticked.has(code);
-      input.addEventListener('change', () => {
-        if (input.checked) state.unticked.delete(code); else state.unticked.add(code);
-        updateFilterSummary();
-        renderResults();
+    const countText = code => ' (' + fmtInt(counts.get(code)) + ')';
+    if (codes.length && codes.length === state.codes.length && codes.every((c, i) => c === state.codes[i])) {
+      for (const code of codes) { const n = state.codeCounts.get(code); if (n) n.textContent = countText(code); }
+    } else {
+      state.codes = codes;
+      ui.filterCodes.replaceChildren();
+      state.codeInputs = new Map();
+      state.codeCounts = new Map();
+      codes.forEach((code, i) => {
+        const id = 'code-' + i;
+        const input = el('input', { type: 'checkbox', id });
+        input.checked = !state.unticked.has(code);
+        input.addEventListener('change', () => {
+          if (input.checked) state.unticked.delete(code); else state.unticked.add(code);
+          updateFilterSummary();
+          renderResults();
+        });
+        const count = el('span', { class: 'count' }, countText(code));
+        state.codeInputs.set(code, input);
+        state.codeCounts.set(code, count);
+        ui.filterCodes.append(el('div', { class: 'code' }, input, ' ', el('label', { for: id }, code, count)));
       });
-      state.codeInputs.set(code, input);
-      ui.filterCodes.append(el('div', { class: 'code' }, input, ' ',
-        el('label', { for: id }, code, el('span', { class: 'count' }, ' (' + fmtInt(counts.get(code)) + ')'))));
-    });
+    }
     ui.filterBox.hidden = state.codes.length === 0;
     updateFilterSummary();
   }
@@ -505,25 +646,26 @@
     };
   }
 
-  function safeSearch(query, enter) {
+  // finished: the text is complete (a line of a pasted list), so its last word is not matched as a prefix.
+  function safeSearch(query, enter, finished) {
     try {
-      return normResult(Engine.search(query, state.index, { enter: !!enter }));
+      return normResult(Engine.search(query, state.index, { enter: !!enter, finished: !!finished }));
     } catch (e) {
       console.error(e);
       return { state: 'error', message: e && e.message ? e.message : String(e), main: [], possible: [], isbnPrefix: [], hints: [] };
     }
   }
 
-  function runSearch(enter, opts) {
+  function runSearch(enter) {
     clearTimeout(state.debounce);
     state.enter = !!enter;
-    if (!(opts && opts.keepNotice)) clearNotice();
+    clearNotice();
     const value = ui.box.value;
     if (value !== state.expandedFor) { state.expanded.clear(); state.expandedFor = value; }
     if (!state.index) { state.run = null; renderResults(); return; }   // never search an empty dataset
     const lines = arr(Engine.splitLines(value));
     if (lines.length >= 2) {
-      state.run = { kind: 'multi', value, lines: lines.map(line => ({ line, result: safeSearch(line, true) })) };
+      state.run = { kind: 'multi', value, lines: lines.map(line => ({ line, result: safeSearch(line, true, true) })) };
     } else {
       state.run = { kind: 'single', value, result: safeSearch(value, state.enter) };
     }
@@ -553,16 +695,17 @@
     ui.notice.replaceChildren();
   }
 
-  function setNotice(...nodes) {
+  function setNotice(focus, ...nodes) {
     ui.notice.replaceChildren(...nodes.filter(Boolean).map(n => (n instanceof Node ? n : String(n))));
     ui.notice.hidden = false;
-    ui.notice.focus();
+    if (focus) ui.notice.focus();
   }
 
   function renderResults() {
     const out = ui.results;
     out.replaceChildren();
     state.shown = [];
+    state.cardEls = [];
     state.linkRows = [];
     state.sectionEls = new Map();
     ui.summary.textContent = '';
@@ -575,7 +718,7 @@
     const run = state.run;
     if (!run) return;
     if (run.kind === 'multi') renderMulti(run, out);
-    else renderSingle(run.result, out);
+    else renderSingle(run.result, out, run.value);
   }
 
   function hiddenNote(count, shownCount) {
@@ -598,38 +741,61 @@
     const texts = [];
     const hints = arr(res.hints);
     if (res.isbnQuery && noHits && !hints.some(h => h.code === 'isbnNoMatch')) texts.push(TEXT.isbnFallback);
-    for (const h of hints) texts.push(str(h.text));
+    for (const h of hints) if (h.code === 'isbnNoMatch') texts.push(str(h.text));
+    for (const h of hints) if (h.code !== 'isbnNoMatch') texts.push(str(h.text));
     return [...new Set(texts.filter(Boolean))];
   }
 
-  function noResults(res) {
-    const box = el('div', { class: 'no-results', role: 'region', 'aria-label': 'No listing found' });
-    box.append(el('p', { class: 'no-results-head' }, el('strong', null, TEXT.noListing)));
+  const hintsEl = hints => el('ul', { class: 'hints' }, ...hints.map(h => el('li', null, h)));
+
+  // What every "no listing" message carries: a tab that wasn't loaded (so wasn't searched), why the list may name the
+  // item differently, what to try (not "the ISBN" after an ISBN search), and the sheet as the source of truth.
+  function appendNoListingHelp(box, isbnQuery, hints) {
+    const errs = state.data ? arr(state.data.errors) : [];
+    if (errs.length) {
+      const names = [...new Set(errs.map(e => str(e.tab).trim()).filter(Boolean))];
+      box.append(el('p', { class: 'unloaded' }, names.length
+        ? listText(names) + " couldn't be loaded, so " + (names.length === 1 ? "it wasn't" : "they weren't") + ' searched.'
+        : "Part of the list couldn't be loaded, so it wasn't searched."));
+    }
+    if (isbnQuery && hints.length) box.append(hintsEl(hints));
     const fetched = state.data ? ' (the list was fetched at ' + hhmm(state.data.fetchedAt) + ')' : '';
     box.append(el('p', null, 'The list may name it with another spelling, title or edition, or the sheet may have changed since this page loaded' + fetched + '.'));
     box.append(el('p', null, 'Try:'));
     box.append(el('ul', null,
       el('li', null, "the author's surname alone"),
       el('li', null, 'one distinctive word from the title'),
-      el('li', null, 'the ISBN')));
-    const hints = hintList(res, true);
-    if (hints.length) box.append(el('ul', { class: 'hints' }, ...hints.map(h => el('li', null, h))));
+      isbnQuery ? null : el('li', null, 'the ISBN')));
+    if (!isbnQuery && hints.length) box.append(hintsEl(hints));
     const url = sheetLinkUrl();
     if (url) box.append(el('p', null, 'The sheet is the source of truth: ', extLink(url, 'open the sheet'), '.'));
+  }
+
+  function noResults(res) {
+    const box = el('div', { class: 'no-results', role: 'region', 'aria-label': 'No listing found' });
+    box.append(el('p', { class: 'no-results-head' }, el('strong', null, TEXT.noListing)));
+    appendNoListingHelp(box, res.isbnQuery, hintList(res, true));
     return box;
   }
 
-  function renderSingle(res, out) {
+  function renderSingle(res, out, value) {
     if (res.state === 'error') {
       out.append(el('p', { class: 'warning' }, "Something went wrong with this search (" + res.message + "). Try other words, or search the sheet itself."));
       return;
     }
     if (res.state === 'empty') return;
     if (res.state === 'tooShort') { ui.summary.textContent = TEXT.tooShort; return; }
+    if (/[;؛]/.test(str(value))) out.append(el('p', { class: 'note' }, TEXT.semicolon));
 
     const main = splitHidden(res.main), possible = splitHidden(res.possible), prefix = splitHidden(res.isbnPrefix);
     const shown = main.shown.length + possible.shown.length + prefix.shown.length;
     const hidden = main.hidden + possible.hidden + prefix.hidden;
+    if (!shown && !hidden && res.state === 'ok' && res.hints.some(h => h.code === 'keepTyping')) {
+      // A 1–2 letter unfinished word with nothing found yet: not a verdict (Enter searches it as typed).
+      ui.summary.textContent = TEXT.keepTyping;
+      out.append(el('p', { class: 'hint' }, ...hintList(res, false)));
+      return;
+    }
 
     const summary = [];
     if (res.state === 'stopwordsOnly') summary.push(TEXT.keepTyping);
@@ -651,7 +817,9 @@
         key: 'possible', title: 'Possible matches', hits: possible.shown, limit: LIMITS.possible, level: 2, noun: 'possible matches',
         intro: main.shown.length
           ? 'These rows share some of your words. Open each one to check.'
-          : 'No row matches every word, but these rows share some of your words. Open each one to check.',
+          : main.hidden
+            ? 'Rows that match every word are hidden by the Banned By filter; these rows share some of your words. Open each one to check.'
+            : 'No row matches every word, but these rows share some of your words. Open each one to check.',
       }));
     }
     if (prefix.shown.length) {
@@ -663,19 +831,25 @@
     if (!shown && !hidden && res.state === 'ok') out.append(noResults(res));
     else if (shown && !main.shown.length && res.state === 'ok') {
       const hints = hintList(res, false);
-      if (hints.length) out.append(el('ul', { class: 'hints' }, ...hints.map(h => el('li', null, h))));
+      if (hints.length) out.append(hintsEl(hints));
     }
   }
 
+  // Each line is counted once: with matches, possible matches only, matches all hidden by the filter, couldn't be
+  // searched (an error), not searched (only common words), or without a listing. Only the last is "no listing".
   function renderMulti(run, out) {
-    let withMatches = 0, possibleOnly = 0, without = 0;
+    let withMatches = 0, possibleOnly = 0, hiddenOnly = 0, failed = 0, notSearched = 0, without = 0;
     const blocks = run.lines.map((ln, i) => {
       const res = ln.result;
       const main = splitHidden(res.main), possible = splitHidden(res.possible), prefix = splitHidden(res.isbnPrefix);
       const shown = main.shown.length + possible.shown.length + prefix.shown.length;
       const hidden = main.hidden + possible.hidden + prefix.hidden;
+      const commonOnly = res.state === 'stopwordsOnly' && !shown && !hidden;
       if (main.shown.length) withMatches++;
       else if (shown) possibleOnly++;
+      else if (hidden) hiddenOnly++;
+      else if (res.state === 'error') failed++;
+      else if (commonOnly) notSearched++;
       else without++;
 
       const id = 'line-' + (i + 1);
@@ -698,24 +872,31 @@
       if (prefix.shown.length) {
         sec.append(section({ key: 'l' + i + ':isbnPrefix', title: 'ISBN starts with…', hits: prefix.shown, limit: LIMITS.isbnPrefix, level: 3, noun: 'rows' }));
       }
-      if (!shown && !hidden) {
+      if (commonOnly) {
+        sec.append(el('div', { class: 'line-empty' }, el('p', null, 'Not searched: this line has only common words such as “the”.')));
+      } else if (!shown && !hidden && res.state !== 'error') {
         const box = el('div', { class: 'line-empty' }, el('p', null, el('strong', null, 'No listing found')));
-        if (res.state === 'stopwordsOnly') box.append(el('p', { class: 'note' }, 'This line has only common words such as “the”.'));
         const hints = hintList(res, true);
-        if (hints.length) box.append(el('ul', { class: 'hints' }, ...hints.map(h => el('li', null, h))));
+        if (hints.length) box.append(hintsEl(hints));
         sec.append(box);
       }
       return sec;
     });
 
-    const n = run.lines.length;
-    let summary = n + ' lines: ' + fmtInt(withMatches) + ' with matches, ';
-    if (possibleOnly) summary += fmtInt(possibleOnly) + ' with possible matches only, ';
-    summary += fmtInt(without) + ' without';
-    ui.summary.textContent = summary;
+    const counts = [fmtInt(withMatches) + ' with matches'];
+    if (possibleOnly) counts.push(fmtInt(possibleOnly) + ' with possible matches only');
+    if (hiddenOnly) counts.push(fmtInt(hiddenOnly) + ' with matches hidden by the Banned By filter');
+    if (failed) counts.push(fmtInt(failed) + " couldn't be searched");
+    if (notSearched) counts.push(fmtInt(notSearched) + ' not searched (only common words)');
+    counts.push(fmtInt(without) + ' without');
+    ui.summary.textContent = run.lines.length + ' lines: ' + counts.join(', ');
     if (without) {
-      out.append(el('p', { class: 'note' },
-        (without === 1 ? 'One line has' : fmtInt(without) + ' lines have') + ' no listing. ' + TEXT.noListing.replace(/^No listing found\. /, '')));
+      // One shared "why it may differ" block for every line without a listing.
+      const box = el('div', { class: 'no-results', role: 'region', 'aria-label': 'Lines with no listing' });
+      box.append(el('p', { class: 'no-results-head' }, el('strong', null,
+        (without === 1 ? 'One line has' : fmtInt(without) + ' lines have') + ' no listing. ' + TEXT.noListing.replace(/^No listing found\. /, ''))));
+      appendNoListingHelp(box, false, []);
+      out.append(box);
     }
     out.append(...blocks);
   }
@@ -779,6 +960,7 @@
     state.shown.push(row);
     const lvl = (row.status && row.status.level) || 'blank';
     const art = el('article', { class: 'card card-' + lvl + ' tier-' + (hit.tier || 'match'), tabindex: '-1' });
+    state.cardEls.push({ el: art, row });
     const hl = hit.highlights || {};
 
     // Title (display form, highlighted) and the form as written when different
@@ -790,7 +972,8 @@
     if (title.trim()) appendHighlighted(h, title, hl.title);
     else h.append(el('span', { class: 'missing' }, 'title not listed'));
     art.append(h);
-    if (asWritten.trim() && asWritten !== title) art.append(el('p', { class: 'as-written' }, 'listed as “' + asWritten + '”'));
+    const flat = t => t.replace(/\s+/g, ' ').trim();
+    if (flat(asWritten) && flat(asWritten) !== flat(title)) art.append(el('p', { class: 'as-written' }, 'listed as “' + asWritten + '”'));
 
     // Author
     if (str(row.author).trim()) {
@@ -858,7 +1041,7 @@
 
     // Where it is: "Sheet1 · row 16" as text, plus a link to that row
     const where = el('p', { class: 'where' }, str(row.tab) + ' · row ' + row.row);
-    const link = extLink(Sheet.rowUrl(row.sheetId, row.gid, row.row, row.lastCol || 'G'), 'Open in the sheet', 'row-link');
+    const link = row.sheetId ? extLink(Sheet.rowUrl(row.sheetId, row.gid, row.row, row.lastCol || 'G'), 'Open in the sheet', 'row-link') : null;
     if (link) {
       link.append(el('span', { class: 'visually-hidden' }, ' (' + str(row.tab) + ' row ' + row.row + ')'));
       linkRow.set(link, row);
@@ -871,48 +1054,68 @@
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Row links: when the data is 5+ minutes old, check the sheet again before opening a row
+  // Row links: when the data is 5+ minutes old, check the sheet again before opening a row. The new tab opens inside
+  // the click (so popup blockers allow it), shows "Checking…", and is sent to the row's current place once found.
 
-  async function checkAgain(link) {
+  function openBlankTab() {
+    let w = null;
+    try { w = window.open('', '_blank'); } catch (e) { w = null; }
+    if (!w) return null;
+    try { w.opener = null; } catch (e) { /* ignore */ }
+    try { w.document.title = 'Checking the sheet again…'; w.document.body.textContent = 'Checking the sheet again…'; } catch (e) { /* ignore */ }
+    return w;
+  }
+
+  // The teacher may have closed the tab meanwhile.
+  function sendTab(tab, url) {
+    try { if (tab && !tab.closed) { if (url) tab.location.replace(url); else tab.close(); } } catch (e) { /* ignore */ }
+  }
+
+  async function checkAgain(link, tab) {
     const row = linkRow.get(link);
-    if (!row) return;
-    const oldRow = row.row, gid = str(row.gid), fp = fpOf(row);
+    if (!row) { sendTab(tab, null); return; }
+    const oldRow = row.row;
+    // The same row can be shown more than once (multi-line); remember which of its links was clicked.
+    const occurrence = Math.max(0, state.linkRows.filter(e => e.row === row).findIndex(e => e.el === link));
     link.textContent = 'Checking the sheet again…';
     link.setAttribute('aria-busy', 'true');
     const ok = await reload({ background: true });
 
-    if (!ok) {
-      const current = state.linkRows.find(e => e.row === row);
-      const target = current ? current.el : link;
-      target.removeAttribute('aria-busy');
-      target.textContent = "Couldn't check again; open row " + oldRow + ' as loaded at ' + hhmm(state.data && state.data.fetchedAt);
-      target.dataset.checked = '1';
-      if (target.isConnected) target.focus();
-      return;
-    }
-    const cands = state.data.rows.filter(r => str(r.gid) === gid && fpOf(r) === fp);
-    const newRowNumber = nearest(cands.map(r => r.row), oldRow);
-    const target = newRowNumber == null ? null : cands.find(r => r.row === newRowNumber);
-    const entry = target && state.linkRows.find(e => e.row === target);
-    const msg = target
-      ? (target.row === oldRow ? 'Checked again: still at row ' + target.row + ' — open it' : 'Checked again: now at row ' + target.row + ' — open it')
-      : null;
-    if (entry) {
-      entry.el.removeAttribute('aria-busy');
-      entry.el.textContent = msg;
-      entry.el.dataset.checked = '1';
-      entry.el.focus();
-      return;
-    }
-    if (target) {
-      const a = extLink(Sheet.rowUrl(target.sheetId, target.gid, target.row, target.lastCol || 'G'), msg, 'row-link');
+    // Focus follows the answer only if the teacher left it on the link (or a re-render dropped it), never from the box.
+    const mayFocus = document.activeElement === link || isFocusLost();
+    const linkFor = r => {
+      if (r === row && link.isConnected) return link;
+      const same = state.linkRows.filter(e => e.row === r);
+      return (same[occurrence] || same[0] || {}).el || null;
+    };
+    const answer = (a, text) => {
+      a.removeAttribute('aria-busy');
+      a.textContent = text;
       a.dataset.checked = '1';
-      setNotice(str(row.tab) + ' row ' + oldRow + ' (“' + str(row.title) + '”): ', a);
+      if (mayFocus && a.isConnected) a.focus();
+    };
+
+    if (!ok) {
+      sendTab(tab, Sheet.rowUrl(row.sheetId, row.gid, oldRow, row.lastCol || 'G'));
+      answer(linkFor(row) || link, "Couldn't check again; " + (tab ? 'opened' : 'open') + ' row ' + oldRow + ' as loaded at ' + hhmm(state.data && state.data.fetchedAt));
       return;
     }
-    const url = Sheet.sheetUrl(row.sheetId, row.gid);
-    setNotice('Checked again: “' + str(row.title) + '” (' + str(row.tab) + ' row ' + oldRow + ") isn't in the sheet as it was; it may have been edited or removed. ",
-      extLink(url, 'Open the sheet'));
+    const target = state.data.rows.includes(row) ? row : (state.rowPairs && state.rowPairs.get(row)) || null;
+    if (!target) {
+      sendTab(tab, null);
+      const url = Sheet.sheetUrl(row.sheetId, row.gid);
+      setNotice(mayFocus, 'Checked again: “' + str(row.title) + '” (' + str(row.tab) + ' row ' + oldRow + ") isn't in the sheet as it was; it may have been edited or removed. ",
+        extLink(url, 'Open the sheet'));
+      return;
+    }
+    const url = Sheet.rowUrl(target.sheetId, target.gid, target.row, target.lastCol || 'G');
+    sendTab(tab, url);
+    const msg = target.row === oldRow ? 'Checked again: still at row ' + target.row + ' — open it' : 'Checked again: now at row ' + target.row + ' — open it';
+    const shownLink = linkFor(target);
+    if (shownLink) { answer(shownLink, msg); return; }
+    const a = extLink(url, msg, 'row-link');
+    a.dataset.checked = '1';
+    setNotice(mayFocus, str(row.tab) + ' row ' + oldRow + ' (“' + str(row.title) + '”): ', a);
   }
 
   function onResultsClick(e) {
@@ -920,7 +1123,7 @@
     if (!a || a.dataset.checked === '1' || e.button !== 0) return;
     if (!state.data || !linkRow.has(a) || ageMs() < REFRESH_AFTER) return;
     e.preventDefault();
-    checkAgain(a);
+    checkAgain(a, openBlankTab());
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -973,10 +1176,20 @@
       return;
     }
     state.source = choice.source;
-    renderSource();
-    state.aliasesPromise = loadAliases();
     if (ui.box.value) autoGrow();
-    reload({});
+    const go = () => {
+      renderSource();
+      state.aliasesPromise = loadAliases();
+      reload({});
+    };
+    if (state.source.kind !== 'script' || !state.overridden) { go(); return; }
+    // ?script= to another script: trusted only when config.trustedScripts lists it (by address or its SHA-256).
+    scriptDigest(state.source.url).then(digest => {
+      state.scriptDigest = digest;
+      if (isTrustedScript(state.source.url, digest)) state.overridden = false;
+      state.untrusted = state.overridden;
+      go();
+    });
   }
 
   start();

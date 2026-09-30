@@ -199,6 +199,29 @@ test('section-heading rows become context and an issue, only when most rows have
   assert.deepEqual(few.rows.map(r => r.title), ['Foo', 'Bar', 'Baz']);
   assert.equal(few.issues.filter(i => i.kind === 'sectionHeading').length, 0);
 
+  // A title-only row that doesn't read like a heading stays an item (merged Banned By on the CSV path, or a new row
+  // with only its title so far) and never labels the rows below it (COV-1)
+  const merged = rowsOf(csv([
+    'Title,Author,ISBN,Banned By,Type,Year of Banning,Memo',
+    'Alpha Book,A Writer,,Ministry,Book,2020-2021,',
+    'Merged Ban Twin,,,,,,',
+    'Gamma Book,C Writer,,KES,Book,2020-2021,',
+    'Delta Book,D Writer,,KES,Book,2020-2021,',
+  ]));
+  assert.deepEqual(merged.rows.map(r => [r.row, r.title, r.section, r.status.label]), [
+    [2, 'Alpha Book', null, 'Must remove (Ministry)'], [3, 'Merged Ban Twin', null, 'Status not stated, open the row'],
+    [4, 'Gamma Book', null, 'Check case by case (KES)'], [5, 'Delta Book', null, 'Check case by case (KES)'],
+  ]);
+  assert.equal(merged.issues.filter(i => i.kind === 'sectionHeading').length, 0);
+  const headingLike = ['2024/25 additions', 'Section B', 'Newer titles', 'Continued from above', 'Added this year:'];
+  for (const h of headingLike) {
+    const out = rowsOf(csv(['Title,Author,Banned By', 'A,B,Ministry', h + ',,', 'C,D,KES', 'E,F,KES']));
+    assert.deepEqual(out.rows.map(r => [r.title, r.section]), [['A', null], ['C', h], ['E', h]], h);
+  }
+  // Apps Script path: a heading merged across the row repeats its text in every cell
+  const across = rowsOf(csv(['Title,Author,Banned By', 'A,B,Ministry', 'Plain Words,Plain Words,Plain Words', 'C,D,KES', 'E,F,KES']));
+  assert.deepEqual(across.rows.map(r => [r.title, r.section]), [['A', null], ['C', 'Plain Words'], ['E', 'Plain Words']]);
+
   // A row with any other cell filled is an item, not a heading
   const item = rowsOf(csv(['Title,Author,Banned By,Status', 'A,B,Ministry,', 'C,D,KES,', 'Lonely,,,Lifted']));
   assert.deepEqual(item.rows.map(r => r.title), ['A', 'C', 'Lonely']);
@@ -242,6 +265,17 @@ test('parseBannedBy', () => {
     ['KES & RS + HUBS', 'other', 'Check case by case (KES, RS, HUBS)', ['KES', 'RS', 'HUBS']],
     ['KES, kes', 'other', 'Check case by case (KES)', ['KES']],
     ['MIN', 'other', 'Check case by case (MIN)', ['MIN']],
+    // COV-7: variants two edits away, other forms and abbreviations still mean Ministry ("when in doubt, the more severe")
+    ['Minstery', 'ministry', 'Must remove (Ministry)', ['Ministry']],
+    ['Ministries', 'ministry', 'Must remove (Ministry)', ['Ministry']],
+    ['Minister', 'ministry', 'Must remove (Ministry)', ['Ministry']],
+    ['Min.', 'ministry', 'Must remove (Ministry)', ['Ministry']],
+    ['M O E', 'ministry', 'Must remove (Ministry)', ['Ministry']],
+    ['KES / Minstery', 'ministry', 'Must remove (Ministry)', ['KES', 'Ministry']],
+    ['Minstrel', 'other', 'Check case by case (Minstrel)', ['Minstrel']],
+    ['Industry', 'other', 'Check case by case (Industry)', ['Industry']],
+    ['Registry', 'other', 'Check case by case (Registry)', ['Registry']],
+    ['M O', 'other', 'Check case by case (M O)', ['M O']],
     ['Library Committee', 'other', 'Check case by case (Library Committee)', ['Library Committee']],
     ['Brandon', 'other', 'Check case by case (Brandon)', ['Brandon']],
   ];
@@ -315,14 +349,18 @@ test('tabNameFromDisposition', () => {
 test('csvUrl, rowUrl, sheetUrl', () => {
   const b = 'https://docs.google.com/spreadsheets/d/' + SID;
   assert.equal(S.csvUrl(SID, '1111920478'), b + '/export?format=csv&gid=1111920478');
-  assert.equal(S.csvUrl(SID), b + '/export?format=csv&gid=0');
-  assert.equal(S.csvUrl(SID, null), b + '/export?format=csv&gid=0');
+  assert.equal(S.csvUrl(SID, '0'), b + '/export?format=csv&gid=0');
+  assert.equal(S.csvUrl(SID), b + '/export?format=csv', 'no gid: Google exports the first tab');
+  assert.equal(S.csvUrl(SID, null), b + '/export?format=csv');
+  assert.equal(S.csvUrl(SID, ''), b + '/export?format=csv');
   assert.equal(S.rowUrl(SID, '0', 16), b + '/edit?gid=0#gid=0&range=A16:G16');
   assert.equal(S.rowUrl(SID, '123', 4, 'D'), b + '/edit?gid=123#gid=123&range=A4:D4');
   assert.equal(S.rowUrl(SID, '123', 4, 'bad'), b + '/edit?gid=123#gid=123&range=A4:G4');
+  assert.equal(S.rowUrl(SID, '', 4), b + '/edit', 'tab id unknown: Google ignores a range without a gid, so link the sheet');
   assert.equal(S.sheetUrl(SID, '0'), b + '/edit?gid=0#gid=0');
   assert.equal(S.sheetUrl(SID, '1111920478'), b + '/edit?gid=1111920478#gid=1111920478');
   assert.equal(S.sheetUrl(SID, null), b + '/edit');
+  assert.equal(S.sheetUrl(SID, ''), b + '/edit');
   assert.equal(S.colLetter(0), 'A');
   assert.equal(S.colLetter(25), 'Z');
   assert.equal(S.colLetter(26), 'AA');
@@ -494,6 +532,46 @@ test('load (CSV): network error, HTML login page, HTTP 404, no header, timeout',
 
   res = await S.load({ kind: 'csv', sheetId: 'bad id!', tabs: [] }, { fetch: async () => { throw new Error('should not fetch'); } });
   assert.equal(res.errors[0].kind, 'format');
+});
+
+test('load (CSV): a link without a gid reads the first tab, and uses gid 0 only when Google names the same tab', async () => {
+  const first = /\/export\?format=csv$/;
+  const route = (firstName, gid0) => {
+    const fn = async url => {
+      fn.urls.push(url);
+      if (first.test(url)) return csvResponse(SYN, firstName);
+      return gid0 ? gid0() : new Response('', { status: 400 });
+    };
+    fn.urls = [];
+    return fn;
+  };
+  // gid 0 is the first tab
+  let fetch = route('Main', () => csvResponse(SYN, 'Main'));
+  let res = await S.load({ kind: 'csv', sheetId: SID, tabs: [{ gid: null, name: null }] }, { fetch });
+  assert.deepEqual(res.errors, []);
+  assert.deepEqual(res.tabs.map(t => [t.tab, t.gid]), [['Main', '0']]);
+  assert.equal(res.rows[0].gid, '0');
+  assert.ok(fetch.urls.includes(S.csvUrl(SID, null)) && fetch.urls.includes(S.csvUrl(SID, '0')));
+
+  // gid 0 no longer exists (400): the first tab still loads; its id stays unknown
+  fetch = route('Main');
+  res = await S.load({ kind: 'csv', sheetId: SID, tabs: [] }, { fetch });
+  assert.deepEqual(res.errors, []);
+  assert.deepEqual(res.tabs.map(t => [t.tab, t.gid]), [['Main', '']]);
+  assert.equal(S.rowUrl(res.rows[0].sheetId, res.rows[0].gid, res.rows[0].row), 'https://docs.google.com/spreadsheets/d/' + SID + '/edit');
+
+  // gid 0 is another tab, or the probe fails: the first tab is read, id unknown
+  fetch = route('Main', () => csvResponse(OTHER, 'Archive'));
+  res = await S.load({ kind: 'csv', sheetId: SID, tabs: [{ gid: null, name: null }] }, { fetch });
+  assert.deepEqual(res.tabs.map(t => [t.tab, t.gid]), [['Main', '']]);
+  assert.equal(res.rows.length, 7);
+  fetch = route('Main', () => { throw new TypeError('Failed to fetch'); });
+  res = await S.load({ kind: 'csv', sheetId: SID, tabs: [{ gid: null, name: null }] }, { fetch });
+  assert.deepEqual(res.tabs.map(t => [t.tab, t.gid]), [['Main', '']]);
+
+  // the first tab itself fails
+  res = await S.load({ kind: 'csv', sheetId: SID, tabs: [{ gid: null, name: null }] }, { fetch: async () => { throw new TypeError('Failed to fetch'); } });
+  assert.deepEqual(res.errors.map(e => [e.tab, e.kind]), [['the first tab', 'network']]);
 });
 
 test('load (script): success, configured names, {error}, bad URL, HTML page', async () => {
