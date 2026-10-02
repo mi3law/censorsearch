@@ -3,13 +3,13 @@
 // to the page address. The search text itself never goes into the address.
 window.CENSORSEARCH_CONFIG = {
   // The Google Sheet read by link (the default path). It must be shared "Anyone with the link can view".
-  sheetUrl: 'https://docs.google.com/spreadsheets/d/1fnfj7W8ZZvBSFNTfkyqPKupGUrvw79etZYF_ZHWVhzo/edit?gid=0#gid=0',
+  sheetUrl: 'https://docs.google.com/spreadsheets/d/1LIUGEVFv4hLN2JTn2OASTBKW5mr0oXl8pWSQNGFkHck/edit?gid=0#gid=0',
   // Tabs to search, by tab id (the number after gid= in the tab's link), which survives renames; `name` is how results cite the tab.
-  tabs: [{ gid: '0', name: 'Sheet1' }],         // v1: main tab only; add { gid: '1111920478', name: 'Other Materials' } to search it too
+  tabs: [{ gid: '0', name: 'Sheet1' }],
   // Apps Script web app URL (https://script.google.com/macros/s/<id>/exec). When set, the page reads through it instead of the CSV
   // link above, and the script's own tab list decides which tabs are searched (see apps-script/README.md). sheetUrl should
   // then still name the same sheet: it is the "Open the sheet" link when the script can't be reached.
-  scriptUrl: '',
+  scriptUrl: 'https://script.google.com/macros/s/AKfycbx2qUWY6M585ZRUEF4uiDU0Wh9Ntwx0E5PGqZ8Pi8gsrEJ91O3q3bjyp7Tdp9c9MuRncg/exec',
   // The school's own Apps Script, when it is shared as a ?script= link instead of scriptUrl (keeping its address out of this
   // public file): list the code the page shows under "Notes for the list's maintainers" when opened with that link. Any other
   // ?script= link is marked on the page as not its usual list, with no links to the sheet it claims to read.
