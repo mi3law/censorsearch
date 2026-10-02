@@ -584,7 +584,10 @@
         if (!gid && named && file && file === await gid0File) gid = '0';
         const tab = configured || named || 'Sheet';
         try {
-          return { part: extractRows(tableFromCsv(parseCsv(body), { tab, gid, sheetId }), { schoolCode }) };
+          const part = extractRows(tableFromCsv(parseCsv(body), { tab, gid, sheetId }), { schoolCode });
+          // The tab's own name from Google, kept beside a configured one so the settings page can show a mix-up.
+          if (named) part.meta.sheetTabName = named;
+          return { part };
         } catch (e) {
           return { error: { tab, message: e.kind ? e.message : MSG.noHeader, kind: 'format' } };
         }
