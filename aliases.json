@@ -1,0 +1,11 @@
+{
+  "_readme": "Names the sheet doesn't contain but teachers might type. Each entry lists every name or title that means the same thing; searching any one of them also searches the others, and results found that way are labelled 'via alias'. To add one, copy an entry, set kind to 'pen name', 'acronym' or 'alternate title', and list the names. Keep the file valid JSON: double quotes, a comma between entries and none after the last. The list only widens searches; it never hides or changes a row.",
+  "aliases": [
+    { "kind": "pen name", "names": ["Daniel Handler", "Lemony Snicket"] },
+    { "kind": "pen name", "names": ["R. L. Stine", "Jovial Bob Stine"] },
+    { "kind": "acronym", "names": ["CKLA", "Core Knowledge Language Arts"] },
+    { "kind": "alternate title", "names": ["Philosopher's Stone", "Sorcerer's Stone"] },
+    { "kind": "acronym", "names": ["WWII", "WW2", "World War II", "World War 2", "World War Two", "Second World War"] },
+    { "kind": "acronym", "names": ["WWI", "WW1", "World War I", "World War 1", "World War One", "First World War"] }
+  ]
+}
