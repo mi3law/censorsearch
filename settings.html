@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://docs.google.com https://*.googleusercontent.com https://script.google.com https://api.github.com; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="robots" content="noindex">
+  <meta name="color-scheme" content="light dark">
+  <title>CensorSearch settings</title>
+  <meta name="description" content="For the list's maintainers: change which sheet CensorSearch reads, check it, and save the change to config.js on GitHub.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="config.js"></script>
+  <script defer src="src/sheet.js"></script>
+  <script defer src="src/settings.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <p class="back-link"><a href="./">Back to the search page</a></p>
+    <h1>CensorSearch settings</h1>
+    <p class="lede">For the list's maintainers: choose which sheet the search page reads, check that it reads well, and save the change to config.js on GitHub. Nothing here changes the sheet itself.</p>
+  </header>
+
+  <main id="main" class="page settings">
+    <noscript>
+      <p class="noscript">The settings page needs JavaScript. Turn JavaScript on for this page, or edit config.js on GitHub by hand.</p>
+    </noscript>
+
+    <div id="framed" class="notice" hidden>
+      <p>For safety, the settings page doesn't work inside another page.</p>
+      <p><a id="framed-link" href="settings.html" target="_blank" rel="noopener noreferrer">Open the settings page on its own</a></p>
+    </div>
+
+    <div id="settings-app" hidden>
+      <p id="page-status" class="status-line" role="status" aria-live="polite" tabindex="-1">Reading config.js…</p>
+
+      <section id="current" class="settings-section" aria-labelledby="current-h">
+        <h2 id="current-h">Current settings</h2>
+        <p id="current-note" class="warning" hidden></p>
+        <dl id="current-list" class="current-list"></dl>
+      </section>
+
+      <form id="settings-form" class="settings-section" novalidate aria-labelledby="change-h" hidden>
+        <h2 id="change-h">Change the settings</h2>
+
+        <fieldset id="mode-fieldset" class="group-box">
+          <legend>How the page reads the list</legend>
+          <p class="choice"><input type="radio" name="mode" id="mode-link" value="link"> <label for="mode-link">By link: the sheet is shared "Anyone with the link can view"</label></p>
+          <p class="choice"><input type="radio" name="mode" id="mode-script" value="script"> <label for="mode-script">Through the Apps Script reader, for a sheet that can't be shared by link (see apps-script/README.md)</label></p>
+          <p id="mode-error" class="field-error" hidden></p>
+        </fieldset>
+
+        <div class="field">
+          <label for="sheet-url">Sheet link <span id="sheet-url-optional" class="optional" hidden>(optional)</span></label>
+          <p id="sheet-url-help" class="help">The Google Sheet's address, copied from the browser's address bar while the sheet is open.</p>
+          <input id="sheet-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="sheet-url-help">
+          <p id="sheet-url-error" class="field-error" hidden></p>
+          <p id="sheet-url-hint" class="hint-box" hidden></p>
+        </div>
+
+        <fieldset id="tabs-fieldset" class="group-box" aria-describedby="tabs-help">
+          <legend>Tabs to search</legend>
+          <p id="tabs-help" class="help">Each tab by its tab id, the number after gid= in its link (it stays the same when the tab is renamed), and the name results cite it by.</p>
+          <ul id="tab-list" class="tab-list"></ul>
+          <p id="tabs-error" class="field-error" hidden></p>
+          <p><button type="button" id="tab-add">Add a tab</button></p>
+          <div class="field add-from-link">
+            <label for="tab-link">Add a tab from its link</label>
+            <p id="tab-link-help" class="help">Open the tab in the sheet, copy the address and paste it here.</p>
+            <div class="inline-input">
+              <input id="tab-link" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="tab-link-help">
+              <button type="button" id="tab-link-add">Add</button>
+            </div>
+            <p id="tab-link-error" class="field-error" role="alert" hidden></p>
+            <p id="tab-link-note" class="note" aria-live="polite"></p>
+          </div>
+        </fieldset>
+
+        <div id="script-field" class="field" hidden>
+          <label for="script-url">Apps Script address</label>
+          <p id="script-url-help" class="help">The script's Web app URL, ending in /exec (Deploy, then Manage deployments). The script decides which tabs are searched.</p>
+          <input id="script-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="script-url-help">
+          <p id="script-url-error" class="field-error" hidden></p>
+        </div>
+
+        <div class="field">
+          <label for="school-code">School's Banned By code</label>
+          <p id="school-code-help" class="help">The school's own code as written in the Banned By column, such as UAS. Rows with it show "Banned by" and the code.</p>
+          <input id="school-code" type="text" maxlength="40" autocomplete="off" autocapitalize="characters" spellcheck="false" aria-describedby="school-code-help">
+          <p id="school-code-error" class="field-error" hidden></p>
+        </div>
+
+        <details id="advanced" class="advanced">
+          <summary>Advanced</summary>
+          <div class="field">
+            <label for="trusted-scripts">Trusted script codes</label>
+            <p id="trusted-scripts-help" class="help">For a school script shared as a ?script= link: one code per line, as shown under "Notes for the list's maintainers" on the search page opened with that link. Leave empty if there are none.</p>
+            <textarea id="trusted-scripts" rows="3" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="trusted-scripts-help"></textarea>
+            <p id="trusted-scripts-error" class="field-error" hidden></p>
+            <p id="trusted-scripts-note" class="hint-box" hidden></p>
+          </div>
+          <div class="field">
+            <label for="aliases-url">Alias list</label>
+            <p id="aliases-url-help" class="help">A file on this site with pen names, acronyms and alternate titles, such as aliases.json. Leave empty to search without aliases.</p>
+            <input id="aliases-url" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="aliases-url-help">
+            <p id="aliases-url-error" class="field-error" hidden></p>
+          </div>
+          <div class="field">
+            <label for="repo-url">Source code address</label>
+            <p id="repo-url-help" class="help">The GitHub repository this page is published from, such as https://github.com/owner/repo. Saving changes config.js there.</p>
+            <input id="repo-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="repo-url-help">
+            <p id="repo-url-error" class="field-error" hidden></p>
+          </div>
+        </details>
+      </form>
+
+      <section id="check" class="settings-section" aria-labelledby="check-h" hidden>
+        <h2 id="check-h">Check the list</h2>
+        <p class="help">Reads the sheet and the alias list with the settings above, the way the search page will. Saving needs a successful check of exactly these settings.</p>
+        <p><button type="button" id="check-button">Check the list</button></p>
+        <p id="check-status" class="status-line" role="status" aria-live="polite" tabindex="-1"></p>
+        <div id="check-results" class="check-results"></div>
+      </section>
+
+      <section id="save" class="settings-section" aria-labelledby="save-h" hidden>
+        <h2 id="save-h">Review and save</h2>
+        <p id="diff-summary" class="diff-summary"></p>
+        <div id="diff" class="diff" hidden></div>
+        <form id="save-form" novalidate aria-labelledby="save-h">
+          <p id="save-target" class="note"></p>
+          <div class="field">
+            <label for="token">GitHub token</label>
+            <p id="token-help" class="help">Paste a fine-grained personal access token each time you save. It is used for this save only and never stored.</p>
+            <input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="token-help">
+            <p id="token-error" class="field-error" hidden></p>
+          </div>
+          <details id="token-howto" class="howto">
+            <summary>How to make a token</summary>
+            <ol>
+              <li><a id="token-new-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">Open GitHub's new fine-grained token page</a>, signed in as someone who can change the repository. The link fills in the name, owner and permissions below; check them.</li>
+              <li>Token name: anything, such as "CensorSearch settings". Expiration: any; a short one is safer, since you can make a new token whenever you need one.</li>
+              <li>Resource owner: <span id="howto-owner">the repository's owner</span>.</li>
+              <li>Repository access: Only select repositories, then choose <span id="howto-repo">this repository</span>. GitHub can't fill this in.</li>
+              <li>Permissions, Repository permissions: Contents: Read and write, and Pages: Read-only, so this page can find the branch GitHub Pages publishes.</li>
+              <li>Click Generate token and copy it. GitHub shows it only once: keep it in a password manager, not in a file or a message.</li>
+              <li>To stop a token working, revoke it at <a href="https://github.com/settings/personal-access-tokens" target="_blank" rel="noopener noreferrer">github.com/settings/personal-access-tokens</a>. If the owner is an organization, it may need to approve the token first.</li>
+            </ol>
+          </details>
+          <p><button type="button" id="save-button">Save to GitHub</button></p>
+          <p id="save-status" class="status-line" role="status" aria-live="polite" tabindex="-1"></p>
+          <p id="save-links" class="save-links" hidden></p>
+          <p id="publish-status" class="publish-status" aria-live="polite"></p>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <footer class="site-footer">
+    <p>This page changes only config.js, the file that tells the search page which sheet to read. The token you paste goes only to GitHub (api.github.com), for the save you ask for, and is not stored.</p>
+  </footer>
+</body>
+</html>
