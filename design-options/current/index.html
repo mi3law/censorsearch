@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://docs.google.com https://*.googleusercontent.com https://script.google.com; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light dark">
+  <title>CensorSearch</title>
+  <meta name="description" content="Search the banned-materials Google Sheet by title, author or ISBN. The page reads the live sheet each time it opens and stores nothing.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="../../config.js"></script>
+  <script defer src="../config.local.js"></script>
+  <script defer src="../../src/sheet.js"></script>
+  <script defer src="../../src/engine.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <h1>CensorSearch</h1>
+    <p class="lede">Check whether a book or other material is on the banned-materials list. Type all or part of a title, an author's name or an ISBN.</p>
+  </header>
+
+  <main id="main" class="page">
+    <noscript>
+      <p class="noscript">CensorSearch needs JavaScript to read the list. Turn JavaScript on for this page, or search the Google Sheet itself.</p>
+    </noscript>
+
+    <div id="override-note" class="override-note" role="note" hidden></div>
+
+    <form id="search-form" class="search" role="search" aria-label="Search the list">
+      <label for="q" class="search-label">Title, author or ISBN</label>
+      <textarea id="q" class="search-box" rows="1" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-describedby="search-tips"></textarea>
+      <ul id="search-tips" class="tips">
+        <li>Many rows have no author; search the title too.</li>
+        <li>Row links open only for people with access to the sheet. If Google asks for access, switch to your school account.</li>
+        <li>To check a reading list, paste several titles on separate lines.</li>
+      </ul>
+    </form>
+
+    <section id="load-state" class="load-state" aria-label="List status">
+      <p id="status" class="status-line" tabindex="-1" aria-live="polite">Loading the list…</p>
+      <p id="status-warning" class="warning" aria-live="polite"></p>
+      <p id="status-actions" class="status-actions" hidden></p>
+      <p id="source" class="source"></p>
+    </section>
+
+    <details id="filter-box" class="filter-box" hidden>
+      <summary id="filter-summary">Filter by Banned By</summary>
+      <fieldset id="filter" class="filter">
+        <legend>Banned by</legend>
+        <p class="help">Untick a code to hide rows listed only under it. Rows with a blank Banned By are always shown, and the results say how many rows the filter hides.</p>
+        <p class="filter-actions">
+          <button type="button" id="filter-all">Tick all</button>
+          <button type="button" id="filter-none">Untick all</button>
+        </p>
+        <div id="filter-codes" class="filter-codes"></div>
+      </fieldset>
+    </details>
+
+    <p id="notice" class="notice" tabindex="-1" hidden></p>
+    <p id="summary" class="summary" aria-live="polite"></p>
+    <div id="results" class="results"></div>
+
+    <details id="maintainer-notes" class="maintainer-notes" hidden>
+      <summary id="maintainer-summary">Notes for the list's maintainers</summary>
+      <ul id="maintainer-list"></ul>
+    </details>
+  </main>
+
+  <footer class="site-footer">
+    <p>The Google Sheet is the source of truth; this page only reads it. Nothing is stored: the list is fetched when the page opens and kept only in this browser tab, and what you type is searched in your browser and sent nowhere.</p>
+    <p class="footer-links"><a id="footer-sheet" hidden>Open the sheet</a> <a id="footer-repo" hidden>Source code</a></p>
+  </footer>
+</body>
+</html>

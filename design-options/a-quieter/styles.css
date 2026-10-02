@@ -1,0 +1,416 @@
+/* CensorSearch, design option A ("Same page, quieter"): today's page and words, with everything a teacher doesn't
+   need for an answer removed, demoted or collapsed. The page also works with this file missing.
+   Type scale: 20 / 18 / 17 / 16 / 15 / 14 / 13 px. Spacing scale: 4 / 8 / 12 / 16 / 24 / 32 / 48 px. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1a1c1f;
+  --muted: #5a6068;
+  --line: #e2e5e9;
+  --rail: #c3c8cf;
+  --field-border: #6b7280;
+  --surface: #f6f7f8;
+  --link: #0b57d0;
+  --link-visited: #6f3fb5;
+  --focus: #0b57d0;
+  --mark-bg: #fff1a8;
+  --mark-fg: #1a1c1f;
+  --tag-bg: #eef1f4;
+  --ministry: #b3261e;
+  --uas: #1e3a8a;
+  --other: #7a5200;
+  --blank: #5a6068;
+  --warn-bg: #fff4e0;
+  --warn-fg: #5c3900;
+  --warn-border: #e0a53c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131416;
+    --fg: #e8eaed;
+    --muted: #a4abb3;
+    --line: #2f343a;
+    --rail: #4b525b;
+    --field-border: #8b929c;
+    --surface: #1c1e21;
+    --link: #8ab4f8;
+    --link-visited: #c9a4f7;
+    --focus: #8ab4f8;
+    --mark-bg: #5c4b00;
+    --mark-fg: #fff6cc;
+    --tag-bg: #272b31;
+    --ministry: #ff8a80;
+    --uas: #e6a1ee;
+    --other: #e8c15a;
+    --blank: #a4abb3;
+    --warn-bg: #33260d;
+    --warn-fg: #ffdca3;
+    --warn-border: #a8762a;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Layout rules below never un-hide what the page's script hid. */
+[hidden] { display: none !important; }
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans Arabic", sans-serif;
+  font-size: 1rem;
+  line-height: 1.5;
+}
+
+.site-header, .page, .site-footer {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 0 16px;
+}
+
+.site-header { padding-top: 24px; }
+h1 { font-size: 1.25rem; line-height: 1.2; font-weight: 700; margin: 0 0 4px; }
+.lede { margin: 0 0 24px; color: var(--muted); font-size: .875rem; text-wrap: balance; }
+
+a { color: var(--link); text-underline-offset: 2px; }
+a:visited { color: var(--link-visited); }
+
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.card:focus, .notice:focus, .status-line:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+mark {
+  background: var(--mark-bg);
+  color: var(--mark-fg);
+  border-radius: 2px;
+  padding: 0 .08em;
+}
+
+button {
+  font: inherit;
+  font-size: .875rem;
+  font-weight: 600;
+  color: var(--fg);
+  background: transparent;
+  border: 1px solid var(--field-border);
+  border-radius: 6px;
+  min-height: 44px;
+  padding: 0 14px;
+  cursor: pointer;
+}
+button:hover { background: var(--surface); }
+button:disabled { opacity: .6; cursor: default; }
+
+summary { cursor: pointer; }
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Warnings: not the page's usual list, a tab that didn't load, old data, a row that changed, no JavaScript */
+.override-note, .notice, .warning, .noscript {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border: 1px solid var(--warn-border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-size: .9375rem;
+  overflow-wrap: anywhere;
+}
+.override-note, .noscript { margin: 0 0 24px; }
+.override-note a, .notice a { color: inherit; }
+.notice { margin: 16px 0 0; }
+
+/* Search box. Help comes after the box in the page (so Tab reaches the box first) and sits on the label's row. */
+.search {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  align-items: end;
+  margin: 0;
+}
+.search-label { grid-column: 1; grid-row: 1; font-weight: 600; padding-bottom: 6px; }
+.search-box {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: block;
+  width: 100%;
+  min-height: calc(4em / 3 + 28px);
+  max-height: 14rem;
+  padding: 12px 14px;
+  font: inherit;
+  font-size: 1.125rem;
+  line-height: calc(4em / 3);
+  color: var(--fg);
+  background: var(--bg);
+  border: 1px solid var(--field-border);
+  border-radius: 8px;
+  resize: vertical;
+  overflow-y: auto;
+}
+.search-box:focus { border-color: var(--focus); }
+
+/* A 44px tap target that reaches up into the space above the label, so the label's row stays one line tall. */
+.help-toggle {
+  grid-column: 2;
+  grid-row: 1;
+  min-width: 44px;
+  margin: -12px -8px 0 0;
+  padding: 8px 8px 0;
+  border: 0;
+  font-weight: 400;
+  color: var(--muted);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.help-toggle:hover { background: transparent; color: var(--fg); }
+.help-toggle:focus-visible { outline-offset: -3px; }
+.help-toggle[aria-expanded="true"] { color: var(--fg); }
+
+.help-panel {
+  grid-column: 1 / -1;
+  grid-row: 3;
+  margin-top: 8px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border-radius: 8px;
+  font-size: .875rem;
+}
+.tips { margin: 0; padding: 0; list-style: none; }
+.tips li + li { margin-top: 8px; }
+
+/* List status: one small quiet line once the list has loaded; a warning box when it couldn't be read. */
+.load-state { margin: 8px 0 0; }
+.load-state p { margin: 0; }
+.status-line {
+  background: var(--warn-bg);
+  color: var(--warn-fg);
+  border: 1px solid var(--warn-border);
+  border-radius: 8px;
+  padding: 12px 16px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.status-line[data-phase="loading"], .status-line[data-phase="loaded"], .status-line[data-phase="partial"] {
+  background: none;
+  color: var(--muted);
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  font-size: .8125rem;
+  font-weight: 400;
+  line-height: 1.4;
+}
+.status-line:not([data-phase="loading"], [data-phase="loaded"], [data-phase="partial"]) { margin-top: 12px; }
+.warning:empty { display: none; }
+.load-state .warning { margin-top: 8px; }
+.load-state .status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  margin-top: 8px;
+  font-size: .875rem;
+}
+.status-actions a { display: inline-block; padding: 12px 0; }
+
+/* Results */
+.summary:empty { display: none; }
+.summary { font-weight: 600; margin: 16px 0 0; }
+.results, .source, .summary, .maintainer-notes { overflow-wrap: anywhere; }
+.results > .warning { margin: 16px 0 0; }
+
+.note, .hint, .section-intro, .line-count, .hidden-by-filter, .more, .results .hints { font-size: .875rem; }
+.note, .hint, .section-intro, .line-count { color: var(--muted); }
+.note, .hint { margin: 8px 0 0; }
+.hidden-by-filter, .more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 12px 0;
+}
+.results > .hints { color: var(--muted); margin: 16px 0 0; padding-left: 20px; }
+
+/* "Listings found (N)" repeats the summary line just above it, so it stays for screen readers only. */
+#sec-main {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.results-section > h2, .results-section > h3 { font-weight: 600; line-height: 1.5; }
+.results-section > h2 { font-size: 1rem; margin: 24px 0 0; }
+.results-section > h3 { font-size: .875rem; margin: 16px 0 0; }
+.section-intro { margin: 0; }
+
+.group {
+  border-left: 2px solid var(--rail);
+  padding-left: 12px;
+  margin: 12px 0;
+}
+.group-head { font-size: .875rem; font-weight: 600; margin: 0; }
+
+/* A result. Sure and close matches: solid outline and a stripe in the status colour. Possible matches: dashed
+   outline, no stripe. Close and possible matches name their tier at the top of the card. */
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--blank);
+  border-radius: 8px;
+  padding: 12px 16px 0;
+  margin: 12px 0;
+}
+.card-ministry { border-left-color: var(--ministry); }
+.card-uas { border-left-color: var(--uas); }
+.card-other { border-left-color: var(--other); }
+.tier-possible { border: 1px dashed var(--field-border); padding-left: 19px; }
+
+.card > * { margin: 0; unicode-bidi: plaintext; }
+.card > p, .card > ul { font-size: .875rem; line-height: 1.45; margin-top: 2px; }
+.card-title { font-size: 1.0625rem; line-height: 1.35; font-weight: 600; }
+.card > .author { font-size: 1rem; line-height: 1.5; }
+.as-written, .matched-in, .label, .missing { color: var(--muted); }
+.card > .matched-in { font-size: .8125rem; }
+.card > ul { padding-left: 20px; }
+.card > .moved, .card > .hidden-flag { font-weight: 600; }
+
+.card > .status { font-size: 1rem; line-height: 1.5; margin-top: 8px; }
+.status-ministry { color: var(--ministry); font-weight: 700; }
+.status-uas { color: var(--uas); font-weight: 700; }
+.status-other { color: var(--other); font-weight: 600; }
+.status-blank { color: var(--blank); }
+.status .raw { color: var(--fg); font-size: .875rem; font-weight: 400; }
+
+.card > .reasons { color: var(--muted); }
+.tier-close > .reasons, .tier-possible > .reasons {
+  order: -1;
+  align-self: flex-start;
+  margin: 0 0 8px;
+  padding: 2px 8px;
+  background: var(--tag-bg);
+  color: var(--fg);
+  border-radius: 6px;
+  font-size: .8125rem;
+  font-weight: 600;
+}
+
+/* Where it is: the tab and row as text, and the link that opens that row. The link's tap target is the full 44px
+   height of the line; its focus ring stays around the words. */
+.card > .where {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  column-gap: .3em;
+  min-height: 44px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.row-link { position: relative; border-radius: 2px; }
+.row-link::after { content: ""; position: absolute; inset: -12px 0; }
+.card > .hidden-flag { margin: 0; padding-bottom: 12px; }
+
+/* Nothing found: the caveat is the one full-size sentence; the rest sits quietly under it. The bar is the text
+   colour, never a status colour and never a warning colour. */
+.no-results {
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--fg);
+  border-radius: 8px;
+  padding: 12px 16px;
+  margin: 16px 0 0;
+  font-size: .875rem;
+  color: var(--muted);
+}
+.no-results > p, .no-results > ul { margin: 0 0 8px; }
+.no-results > :last-child { margin-bottom: 0; }
+.no-results-head { font-size: 1.0625rem; line-height: 1.35; color: var(--fg); }
+.no-results-head strong { font-weight: 600; }
+.no-results .unloaded { font-weight: 600; color: var(--fg); }
+.no-results > .hints { padding: 0; list-style: none; color: var(--fg); }
+
+/* "Try:" and its three items read as one line. */
+.no-results > .try, .no-results > .try-list, .try-list > li { display: inline; margin: 0; padding: 0; }
+.no-results > .try { margin-right: .3em; }
+.try-list > li:not(:last-child)::after { content: " \b7\20"; }
+.no-results > .try-list + p { margin-top: 8px; }
+
+/* The engine's extra hints wait behind one closed disclosure; its summary is a 44px tap target. */
+.more-tips > summary { padding: 12px 0; }
+.more-tips > .hints { margin: 0 0 12px; padding-left: 20px; }
+.no-results > p:last-child a { padding: 12px 0; }
+
+/* Reading list: one block per pasted line, in pasted order. */
+.line { border-top: 1px solid var(--line); margin-top: 16px; padding-top: 16px; }
+.results > .line:first-child { border-top: 0; margin-top: 16px; padding-top: 0; }
+.line > h2 { font-size: 1rem; line-height: 1.5; font-weight: 600; margin: 0; unicode-bidi: plaintext; }
+.line-count { margin: 0; }
+.line > .warning { margin: 8px 0 0; }
+
+/* A line with no listing (or not searched): one quiet row beside a grey bar. */
+.line-empty {
+  border-left: 4px solid var(--rail);
+  padding: 2px 0 2px 12px;
+  margin: 8px 0 0;
+  font-size: .875rem;
+}
+.line-empty p { margin: 0; }
+.line-empty strong { font-weight: 600; }
+.line-empty .hints { margin: 2px 0 0; padding: 0; list-style: none; color: var(--muted); font-size: .8125rem; }
+
+/* Banned By filter: after the results, closed, and not shown until there are results. */
+#results:empty + #filter-box { display: none; }
+.filter-box { margin: 24px 0 0; font-size: .875rem; }
+.filter-box > summary { padding: 12px 0; color: var(--muted); }
+.filter-box[open] > summary { color: var(--fg); }
+.filter {
+  border: 0;
+  border-radius: 8px;
+  background: var(--surface);
+  margin: 0;
+  padding: 12px 16px;
+  min-width: 0;
+}
+.filter legend { float: left; width: 100%; padding: 0; font-weight: 600; }
+.filter .help { clear: both; margin: 0 0 12px; padding-top: 4px; color: var(--muted); }
+.filter-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 4px; }
+.filter-codes { display: flex; flex-wrap: wrap; column-gap: 20px; }
+.filter-codes .code { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; white-space: nowrap; }
+.filter-codes input { width: 18px; height: 18px; margin: 0; accent-color: var(--focus); }
+.filter-codes label { padding: 12px 0; }
+.filter-codes .count { color: var(--muted); }
+
+/* Footer: which sheet, the privacy line, two links and the maintainers' notes. */
+.site-footer {
+  margin-top: 48px;
+  padding-bottom: 32px;
+  color: var(--muted);
+  font-size: .8125rem;
+}
+.site-footer::before { content: ""; display: block; border-top: 1px solid var(--line); margin-bottom: 16px; }
+.site-footer p { margin: 0 0 4px; }
+.site-footer .footer-links { margin: 0; }
+.footer-links a { display: inline-block; padding: 12px 0; margin-right: 16px; }
+.maintainer-notes > summary { padding: 12px 0; }
+.maintainer-notes ul { margin: 0; padding-left: 20px; }
+.maintainer-notes li { unicode-bidi: plaintext; }
+.maintainer-notes li + li { margin-top: 4px; }
+
+@media (min-width: 600px) {
+  .site-header, .page, .site-footer { padding-left: 24px; padding-right: 24px; }
+  .site-header { padding-top: 48px; }
+}

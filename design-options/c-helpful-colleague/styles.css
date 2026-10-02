@@ -1,0 +1,447 @@
+/* CensorSearch, design option C "Helpful Colleague": plain words on one calm, warm page. No shadows, icons or web
+   fonts: the warmth is the page colour, modest rounding and room to breathe. The page also works with this file missing. */
+
+:root {
+  color-scheme: light dark;
+  --bg: #faf6f0;
+  --surface: #ffffff;
+  --ink: #2b2622;
+  --muted: #655b52;
+  --line: #e0d5c6;
+  --field-border: #8c7f72;
+  --accent: #1c5d66;
+  --on-accent: #ffffff;
+  --accent-soft: #e3f0f1;
+  --visited: #6b4a7a;
+  --mark-bg: #ffe9a8;
+  --mark-fg: #2b2622;
+  /* Status chips: text, tint, edge. "Check case by case" is a brown of its own, never the warning amber. */
+  --ministry: #9a2617;
+  --ministry-bg: #fbe7e2;
+  --ministry-line: #ebc2b8;
+  --uas: #1d4f91;
+  --uas-bg: #e4eefa;
+  --uas-line: #bfd3ee;
+  --other: #6e4318;
+  --other-bg: #f2e2cc;
+  --other-line: #dcc29e;
+  --blank: #5c534a;
+  --blank-bg: #efe9e1;
+  --blank-line: #d9cfc2;
+  /* Amber means one thing: something is wrong with the list (not loaded, out of date, not the usual list). */
+  --caution-bg: #fff2d1;
+  --caution-ink: #4a3200;
+  --caution-line: #b87a12;
+
+  /* One type scale and two radii */
+  --t-xs: .8125rem;
+  --t-sm: .875rem;
+  --t-md: 1rem;
+  --t-lg: 1.125rem;
+  --t-xl: clamp(1.5rem, 6.4vw, 2rem);
+  --r: 12px;
+  --r-sm: 8px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1e1a17;
+    --surface: #2a2521;
+    --ink: #f1eae2;
+    --muted: #b8ada1;
+    --line: #3d362f;
+    --field-border: #8a7e72;
+    --accent: #8ccfd6;
+    --on-accent: #12292d;
+    --accent-soft: #1f3a3e;
+    --visited: #cdb0dc;
+    --mark-bg: #6b5210;
+    --mark-fg: #fff6dc;
+    --ministry: #ffb4a6;
+    --ministry-bg: #4a2019;
+    --ministry-line: #7a3a2e;
+    --uas: #a9cbfa;
+    --uas-bg: #1d3050;
+    --uas-line: #35507f;
+    --other: #e8c7a0;
+    --other-bg: #43301d;
+    --other-line: #6b5236;
+    --blank: #d6ccc1;
+    --blank-bg: #3a342e;
+    --blank-line: #554c43;
+    --caution-bg: #3b2d12;
+    --caution-ink: #ffe2a8;
+    --caution-line: #b88a35;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Layout rules below must never un-hide what app.js hid. */
+[hidden] { display: none !important; }
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Noto Sans Arabic", sans-serif;
+  font-size: var(--t-md);
+  line-height: 1.5;
+}
+
+/* One column. It is also what the Help control is placed against (see .help). */
+.wrap {
+  position: relative;
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 8px 16px 32px;
+}
+
+a { color: var(--accent); text-underline-offset: 2px; border-radius: 4px; }
+a:visited { color: var(--visited); }
+
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+.card:focus, .notice:focus, .status-line:focus { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+mark {
+  background: var(--mark-bg);
+  color: var(--mark-fg);
+  border-radius: 3px;
+  padding: 0 .1em;
+}
+
+button {
+  min-height: 44px;
+  padding: 0 16px;
+  font: inherit;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--surface);
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+}
+button:hover { background: var(--accent-soft); }
+button.primary { color: var(--on-accent); background: var(--accent); border-color: var(--accent); }
+button:disabled { opacity: .6; cursor: default; }
+
+summary { cursor: pointer; border-radius: var(--r-sm); }
+
+.visually-hidden {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Name of the page: a small wordmark, with Help at its right */
+.site-header { display: flex; align-items: center; min-height: 44px; padding-right: 5rem; }
+h1 { margin: 0; font-size: var(--t-md); line-height: 1.5; font-weight: 700; color: var(--muted); }
+
+/* Everything in main is one column whose order the stylesheet may change: the loaded status line goes last. */
+.page { display: flex; flex-direction: column; }
+.page > * { min-width: 0; }
+
+/* Amber blocks: the list didn't load, is out of date, or isn't the page's usual list */
+.override-note, .warning, .notice, .noscript,
+.status-line[data-phase="failed"], .status-line[data-phase="config"] {
+  background: var(--caution-bg);
+  color: var(--caution-ink);
+  border: 1px solid var(--caution-line);
+  border-radius: var(--r);
+  padding: 12px 16px;
+  overflow-wrap: anywhere;
+}
+.override-note a, .warning a, .notice a, .noscript a { color: inherit; font-weight: 600; }
+.override-note { margin: 8px 0 0; }
+.noscript { margin: 8px 0 0; }
+
+/* The question, the hint and the box */
+.search-label {
+  display: block;
+  margin: 16px 0 0;
+  font-size: var(--t-xl);
+  line-height: 1.2;
+  font-weight: 700;
+  text-wrap: balance;
+}
+.search-hint { margin: 4px 0 12px; color: var(--muted); }
+.search-box {
+  display: block;
+  width: 100%;
+  min-height: 56px;
+  max-height: 14rem;
+  padding: 13px 16px;
+  font: inherit;
+  font-size: var(--t-lg);
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--surface);
+  border: 2px solid var(--field-border);
+  border-radius: var(--r);
+  resize: none;
+  overflow-y: auto;
+}
+.search-box:focus { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 0; }
+
+/* Help: the control sits at the top right, on the wordmark row; its panel opens here, under the box.
+   Closed, it takes no room between the box and the answer. */
+.help > summary {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  min-height: 44px;
+  list-style: none;
+}
+.help > summary::-webkit-details-marker { display: none; }
+.help-button {
+  display: block;
+  padding: 4px 12px;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  color: var(--accent);
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-sm);
+}
+.help > summary:hover .help-button, .help[open] .help-button { background: var(--accent-soft); }
+.help[open] .help-button { border-color: var(--accent); }
+.help-panel {
+  margin: 12px 0 0;
+  padding: 12px 16px 12px 2.25rem;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+.help-panel li + li { margin-top: 8px; }
+
+/* List status. Loading: under the box. Loaded: one quiet line below the results. Failed: an amber block under the box. */
+.status-line { margin: 16px 0 0; overflow-wrap: anywhere; }
+.status-line[data-phase="loaded"], .status-line[data-phase="partial"] {
+  order: 20;
+  font-size: var(--t-xs);
+  color: var(--muted);
+}
+.status-line[data-phase="failed"], .status-line[data-phase="config"] { font-weight: 600; }
+.warning { margin: 16px 0 0; }
+.warning:empty { display: none; }
+.status-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 16px;
+  margin: 8px 0 0;
+}
+.status-actions a { display: inline-flex; align-items: center; min-height: 44px; }
+
+/* Results */
+.notice { margin: 16px 0 0; }
+.summary {
+  margin: 24px 0 0;
+  font-size: var(--t-lg);
+  line-height: 1.35;
+  font-weight: 600;
+}
+.summary:empty { display: none; }
+/* Not found: the box below says the same sentence, so this copy is for screen readers only. */
+.summary[data-echo="yes"] {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.summary[data-echo="yes"] + .results > :first-child { margin-top: 24px; }
+
+.results, .summary, .notice, .source, .maintainer-notes { overflow-wrap: anywhere; }
+.results:empty { display: none; }
+.results > * { margin: 12px 0 0; }
+.results > .results-section + .results-section { margin-top: 24px; }
+
+.results-section > h2, .results-section > h3 {
+  margin: 0;
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  font-weight: 700;
+  color: var(--muted);
+}
+/* When "Found on the list" is all there is, the summary line has already said it. */
+.results > .results-section:only-child > #sec-main {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.results > .results-section:only-child > #sec-main + .hits { margin-top: 0; }
+.section-intro { margin: 0; font-size: var(--t-sm); color: var(--muted); }
+.note, .hint, .hints { font-size: var(--t-sm); color: var(--muted); }
+.hints { padding-left: 1.25rem; }
+.hidden-by-filter, .more { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; }
+.more { margin: 12px 0 0; }
+
+.hits, .group { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.hits { margin-top: 8px; }
+.group { border-left: 3px solid var(--line); padding-left: 12px; }
+.group-head { margin: 0; font-size: var(--t-sm); font-weight: 700; color: var(--muted); }
+
+/* One entry. The status comes first to the eye (order), the title first to a screen reader (the markup). */
+.card {
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+  padding: 16px 16px 0;
+}
+.card > * { margin: 4px 0 0; font-size: var(--t-sm); }
+.card > .card-title { margin: 0; font-size: var(--t-lg); line-height: 1.3; font-weight: 700; }
+.card > .author { font-size: var(--t-md); }
+.card > .as-written, .card > .matched-in { color: var(--muted); }
+.card > .notes { padding-left: 1.25rem; }
+.card > .reasons { margin-top: 8px; }
+.card > .moved, .card > .hidden-flag { font-weight: 600; }
+.card > .hidden-flag { order: 9; }
+.card-title, .as-written, .author, .meta, .memo, .extra, .section-name, .raw, .line > h2 { unicode-bidi: plaintext; }
+.missing { color: var(--muted); font-style: italic; }
+.label { color: var(--muted); }
+
+.card > .status {
+  order: -1;
+  align-self: flex-start;
+  margin: 0 0 8px;
+  padding: 4px 8px;
+  line-height: 1.4;
+  font-weight: 700;
+  border-width: 1px;
+  border-style: solid;
+  border-radius: var(--r-sm);
+}
+.card > .status + * { margin-top: 8px; }
+.status-ministry { color: var(--ministry); background: var(--ministry-bg); border-color: var(--ministry-line); }
+.status-uas { color: var(--uas); background: var(--uas-bg); border-color: var(--uas-line); }
+.status-other { color: var(--other); background: var(--other-bg); border-color: var(--other-line); }
+.status-blank { color: var(--blank); background: var(--blank-bg); border-color: var(--blank-line); }
+.status .raw { font-weight: 400; }
+
+/* Close match: the same card, plus the reason in an outlined tag */
+.badge {
+  display: inline-block;
+  padding: 0 8px;
+  border: 1px solid var(--field-border);
+  border-radius: var(--r-sm);
+}
+
+/* Possible match: visibly less sure. No fill, a dashed edge, its label on top, and the status outlined. */
+.card.tier-possible { background: transparent; border: 1.5px dashed var(--field-border); }
+.tier-possible > .reasons { order: -2; margin: 0 0 8px; font-weight: 700; color: var(--muted); }
+.tier-possible > .status { background: transparent; border-color: currentColor; }
+
+/* Where it is: tab and row as text, then the link that opens that row */
+.card > .where {
+  order: 10;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  column-gap: 16px;
+  min-height: 44px;
+  margin-top: 12px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+}
+.row-link { display: inline-flex; align-items: center; min-height: 44px; margin-right: -8px; padding: 0 8px; font-weight: 600; }
+.row-link:focus-visible { outline-offset: -3px; }
+
+/* Not found: a neutral block with a bar in the text colour. Never amber, never anything that reads as an all-clear. */
+.no-results {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--ink);
+  border-radius: var(--r);
+  padding: 16px;
+}
+.no-results > * { margin: 8px 0 0; }
+.no-results > :first-child { margin-top: 0; }
+.no-results-head { font-size: var(--t-lg); line-height: 1.35; }
+.no-results ul { margin: 4px 0 0; padding-left: 1.25rem; }
+.no-results .hints { font-size: inherit; color: inherit; }
+.no-results .unloaded { font-weight: 600; }
+.more-tips > summary { padding: 10px 0; font-weight: 600; color: var(--accent); }
+.more-tips > p { margin: 8px 0 0; }
+.more-tips > :last-child { margin-bottom: 8px; }
+
+/* A pasted list: one short row per line (its text, then the outcome in words); cards only where there is something to show */
+.results > .line { margin-top: 0; }
+.results > .line:first-child, .results > :not(.line) + .line { margin-top: 16px; }
+.line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 16px;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.line:last-child { border-bottom: 1px solid var(--line); }
+.line > * { order: 2; flex: 0 0 100%; min-width: 0; margin: 8px 0 0; }
+.line > h2 { order: 0; flex: 1 1 10rem; margin: 0; font-size: var(--t-md); line-height: 1.5; font-weight: 600; }
+.line-no { font-weight: 400; color: var(--muted); }
+.line > .line-count, .line > .line-empty { order: 1; flex: 0 1 auto; margin: 0; font-size: var(--t-sm); }
+.line-count { font-weight: 600; }
+.line-empty { color: var(--muted); }
+.line-empty p { margin: 0; }
+.line > .hits { margin-top: 8px; }
+.line > .results-section { margin-top: 16px; }
+
+/* Filter: a quiet control after the results. With nothing typed it shows only while it is hiding something. */
+.results:empty + .filter-box:not([data-on="yes"]) { display: none; }
+.filter-box { margin: 12px 0 -12px; font-size: var(--t-sm); }
+.filter-box[open] { margin-bottom: 0; }
+.filter-box > summary { padding: 12px 0; color: var(--muted); }
+.filter-box[data-on="yes"] > summary { font-weight: 600; color: var(--ink); }
+.filter {
+  min-width: 0;
+  margin: 0;
+  padding: 8px 16px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--r);
+}
+.filter legend { padding: 0 4px; font-weight: 700; }
+.filter-help { margin: 0 0 12px; color: var(--muted); }
+.filter-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 4px; }
+.filter-actions button { font-size: var(--t-sm); }
+.filter-codes { display: flex; flex-wrap: wrap; gap: 0 24px; }
+.filter-codes .code { display: inline-flex; align-items: center; min-height: 44px; white-space: nowrap; }
+.filter-codes input { width: 20px; height: 20px; margin: 0 8px 0 0; accent-color: var(--accent); }
+.filter-codes label { display: inline-flex; align-items: center; min-height: 44px; }
+.filter-codes .count { color: var(--muted); white-space: pre; }   /* keeps the space before "(12)" inside the flex label */
+
+/* Footer: privacy in one sentence, where the list comes from, and the notes for the people who keep it */
+.site-footer {
+  margin-top: 48px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+  font-size: var(--t-xs);
+  color: var(--muted);
+}
+.site-footer p { margin: 0 0 4px; }
+.footer-links { display: flex; flex-wrap: wrap; gap: 0 24px; }
+.footer-links a { display: inline-flex; align-items: center; min-height: 44px; }
+.maintainer-notes > summary { min-height: 44px; padding: 12px 0; }
+.maintainer-notes ul { margin: 0; padding-left: 1.25rem; }
+.maintainer-notes li + li { margin-top: 4px; }
+
+@media (min-width: 48rem) {
+  .wrap { padding-top: 40px; }
+  .help > summary { top: 40px; }
+  .search-label { margin-top: 24px; }
+}

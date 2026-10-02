@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://docs.google.com https://*.googleusercontent.com https://script.google.com; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="dark">
+  <title>CensorSearch</title>
+  <meta name="description" content="Search the banned-materials Google Sheet by title, author or ISBN. The page reads the live sheet each time it opens and stores nothing.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="../../config.js"></script>
+  <script defer src="../config.local.js"></script>
+  <script defer src="../../src/sheet.js"></script>
+  <script defer src="../../src/engine.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="top">
+    <h1 class="wordmark">CensorSearch</h1>
+    <details class="help">
+      <summary>Help</summary>
+      <ul id="search-tips" class="help-panel">
+        <li>If an author's name finds nothing, try the title. Many entries have no author.</li>
+        <li>To check a reading list, paste it in, one title per line.</li>
+        <li>If Google asks for access when you open an entry, switch to your school account.</li>
+        <li>A solid sign means the entry matches what you typed. A dashed sign means it only might be your item: check before you act.</li>
+      </ul>
+    </details>
+  </header>
+
+  <main id="main" class="page">
+    <noscript>
+      <p class="noscript">CensorSearch needs JavaScript to read the list. Turn JavaScript on for this page, or search the Google Sheet itself.</p>
+    </noscript>
+
+    <div id="override-note" class="override-note" role="note" hidden></div>
+
+    <form id="search-form" class="search" role="search" aria-label="Search the list">
+      <label for="q" class="question">Search the banned list</label>
+      <p id="search-hint" class="search-hint">Type a title, author or ISBN. To check several, paste a list with one per line.</p>
+      <textarea id="q" class="search-box" rows="1" dir="auto" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-describedby="search-hint"></textarea>
+    </form>
+
+    <p id="status" class="status-line" data-phase="loading" tabindex="-1" aria-live="polite">Loading the list…</p>
+    <p id="status-warning" class="warning" aria-live="polite"></p>
+    <p id="status-actions" class="status-actions" hidden></p>
+
+    <p id="notice" class="notice" tabindex="-1" hidden></p>
+    <p id="summary" class="summary" aria-live="polite" aria-atomic="true"></p>
+    <div id="results" class="results"></div>
+
+    <hr class="foot-rule">
+
+    <details id="filter-box" class="filter-box" hidden>
+      <summary id="filter-summary">Filter</summary>
+      <fieldset id="filter" class="filter">
+        <legend>Banned by</legend>
+        <p class="help-text">Untick a name to hide entries listed only under it. Entries with no name always show, and the results always say how many are hidden.</p>
+        <p class="filter-actions">
+          <button type="button" id="filter-all">Select all</button>
+          <button type="button" id="filter-none">Clear all</button>
+        </p>
+        <div id="filter-codes" class="filter-codes"></div>
+      </fieldset>
+    </details>
+  </main>
+
+  <footer class="foot">
+    <p class="privacy">Nothing you type is saved or sent anywhere.</p>
+    <details class="about">
+      <summary>About this list</summary>
+      <p>This page only reads the Google Sheet; the sheet is the list that counts.</p>
+      <p id="source" class="source"></p>
+      <p class="foot-links"><a id="footer-sheet" hidden>Open the sheet</a><a id="footer-repo" hidden>Source code</a></p>
+      <details id="maintainer-notes" class="maintainer-notes" hidden>
+        <summary id="maintainer-summary">For list maintainers</summary>
+        <ul id="maintainer-list"></ul>
+      </details>
+    </details>
+  </footer>
+</body>
+</html>

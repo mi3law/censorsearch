@@ -1,0 +1,379 @@
+/* CensorSearch, design option B "Plain Register": the page title is the instruction, the answer sits directly under
+   the box, each listing leads with its status as a tag in words, and everything that is not the answer waits below.
+   One type scale (14, 15, 16, 18, 24 px on a phone), one rule weight, one amber treatment for "something is wrong
+   with the list", one warning treatment for "this does not mean the item is permitted". The page also works with
+   this file missing. */
+
+:root {
+  color-scheme: light dark;
+  --page: #ffffff;
+  --ink: #0f1b2d;
+  --muted: #4a5568;
+  --rule: #d0d5db;
+  --field: #7a8491;
+  --dashed: #8a94a1;
+  --link: #1a4fb8;
+  --link-visited: #5b3aa0;
+  --focus: #1a4fb8;
+  --mark-bg: #ffe680;
+  --mark-fg: #0f1b2d;
+  --ministry-bg: #fde8e6;
+  --ministry-fg: #8a1c14;
+  --ministry-edge: #d98b84;
+  --ministry-bar: #b3261e;
+  --uas-bg: #e3edfb;
+  --uas-fg: #123e8c;
+  --uas-edge: #8fb0e6;
+  --uas-bar: #1a4fb8;
+  --other-bg: #fff3c9;
+  --other-fg: #5e4100;
+  --other-edge: #dcb955;
+  --other-bar: #9a6b00;
+  --blank-bg: #eceef1;
+  --blank-fg: #36404d;
+  --blank-edge: #aab2bd;
+  --blank-bar: #6b7480;
+  --warn-bg: #fff6df;
+  --warn-fg: #4a3000;
+  --warn-bar: #b87a00;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --page: #12161c;
+    --ink: #e8eaed;
+    --muted: #a7b0bb;
+    --rule: #3a424d;
+    --field: #7d8794;
+    --dashed: #6f7a88;
+    --link: #8fb8ff;
+    --link-visited: #c5a8ff;
+    --focus: #8fb8ff;
+    --mark-bg: #5a4700;
+    --mark-fg: #fff3c2;
+    --ministry-bg: #4a1512;
+    --ministry-fg: #ffc9c4;
+    --ministry-edge: #8f3a33;
+    --ministry-bar: #ff8a80;
+    --uas-bg: #142b52;
+    --uas-fg: #c7dcff;
+    --uas-edge: #3b62a8;
+    --uas-bar: #8fb8ff;
+    --other-bg: #3d2e00;
+    --other-fg: #ffe39a;
+    --other-edge: #8a6a10;
+    --other-bar: #e8c15a;
+    --blank-bg: #262d37;
+    --blank-fg: #d5dae1;
+    --blank-edge: #566170;
+    --blank-bar: #8a94a1;
+    --warn-bg: #33260a;
+    --warn-fg: #ffe2a8;
+    --warn-bar: #d9a02b;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Layout rules below never un-hide what app.js hid. */
+[hidden] { display: none !important; }
+
+html { font-size: 100%; -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  font-size: 1rem;
+  line-height: 1.55;
+}
+
+.site-header, .page, .site-footer {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding-left: 16px;
+  padding-right: 16px;
+}
+
+a { color: var(--link); text-underline-offset: 3px; }
+a:visited { color: var(--link-visited); }
+a:hover { text-decoration-thickness: 2px; }
+
+:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.card:focus, .notice:focus, .status-line:focus { outline: 3px solid var(--focus); outline-offset: 2px; }
+
+mark {
+  background: var(--mark-bg);
+  color: var(--mark-fg);
+  border-radius: 2px;
+  padding: 0 .1em;
+}
+
+.visually-hidden, #sec-main {
+  position: absolute !important;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Buttons: an ink outline; Retry (the one action that fixes a problem) is solid. */
+button {
+  min-height: 2.75rem;
+  padding: .5rem 1rem;
+  font: inherit;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid var(--ink);
+  border-radius: 4px;
+  cursor: pointer;
+}
+button:hover { box-shadow: inset 0 0 0 1px var(--ink); }
+button:disabled { opacity: .6; cursor: default; box-shadow: none; }
+.status-actions button { color: var(--page); background: var(--ink); }
+
+/* Disclosures (Help, More things to try, the filter, About this page): one look, a 44px tap height. */
+summary {
+  display: block;
+  width: fit-content;
+  padding: .625rem 0;
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+  list-style: none;
+}
+summary::-webkit-details-marker { display: none; }
+summary::before {
+  content: "";
+  display: inline-block;
+  margin-right: .5em;
+  border-style: solid;
+  border-width: .3em 0 .3em .45em;
+  border-color: transparent transparent transparent currentColor;
+}
+details[open] > summary::before { transform: rotate(90deg); }
+summary:hover { text-decoration-thickness: 2px; }
+
+/* Header: the service name is a small wordmark; the page title is the question, inside the form. */
+.site-header { padding-top: 1.25rem; }
+.service-name { margin: 0 0 .75rem; font-size: .875rem; font-weight: 700; }
+
+/* The page is one column. The loaded status line is shown below the results (order), under the closing rule. */
+.page { display: flex; flex-direction: column; }
+.page::after { content: ""; order: 9; margin-top: 2rem; border-top: 1px solid var(--rule); }
+
+/* Something is wrong with the list, or it is not the usual list: one amber treatment. */
+.override-note, .notice, .warning, .noscript,
+.status-line[data-phase="failed"], .status-line[data-phase="config"] {
+  margin: 0 0 .75rem;
+  padding: .75rem 1rem;
+  color: var(--warn-fg);
+  background: var(--warn-bg);
+  border-left: 4px solid var(--warn-bar);
+  overflow-wrap: anywhere;
+}
+.override-note a, .notice a, .warning a, .noscript a { color: inherit; }
+.override-note { margin-bottom: 1.25rem; }
+.warning:empty { display: none; }
+
+/* Search: title (the label), one hint sentence with Help at its right, the box. Nothing between the box and the answer. */
+.search { margin: 0 0 1rem; }
+.question { margin: 0 0 .25rem; font-size: 1.5rem; line-height: 1.2; font-weight: 700; }
+.question label { display: block; }
+.q-hint { margin: 0 0 .5rem; padding-right: 4.5rem; color: var(--muted); }
+.field { position: relative; }
+.search-box {
+  display: block;
+  width: 100%;
+  min-height: 3.25rem;
+  max-height: 14rem;
+  padding: .75rem;
+  font: inherit;
+  font-size: 1.125rem;
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--page);
+  border: 1px solid var(--field);
+  border-radius: 4px;
+  resize: none;
+  overflow-y: auto;
+}
+.search-box:focus-visible { border-color: var(--focus); outline-width: 2px; outline-offset: 0; }
+
+/* Help sits on the hint's line, above the box's right edge; its panel opens under the box. Closed, it takes no room. */
+.help > summary {
+  position: absolute;
+  right: 0;
+  bottom: 100%;
+  padding: .75rem 0 .5rem .75rem;
+}
+.help-panel {
+  margin: .75rem 0 0;
+  padding: 0 0 0 1rem;
+  border-left: 4px solid var(--rule);
+  list-style: none;
+}
+.help-panel li + li { margin-top: .5rem; }
+
+/* List status. Loading, failed or misconfigured: directly under the box. Loaded: one quiet line below the results. */
+.status-line { margin: 0 0 .75rem; overflow-wrap: anywhere; }
+.status-line[data-phase="loading"] { color: var(--muted); }
+.status-line[data-phase="loaded"], .status-line[data-phase="partial"] {
+  order: 10;
+  margin: 0;
+  padding-top: .75rem;
+  font-size: .875rem;
+  color: var(--muted);
+}
+.status-actions { margin: 0 0 1rem; }
+.status-actions button { margin-right: .75rem; }
+.status-actions a { display: inline-block; padding: .625rem 0; }
+
+/* Results */
+.summary { margin: 0 0 .75rem; font-size: 1.125rem; line-height: 1.35; font-weight: 700; overflow-wrap: anywhere; }
+.summary:empty { display: none; }
+.results { overflow-wrap: anywhere; }
+.note, .hint { margin: 0 0 .75rem; color: var(--muted); }
+.results > .hints { margin: 0 0 .75rem; padding-left: 1.25rem; }
+.hidden-by-filter, .more {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem .75rem;
+  margin: 0 0 .75rem;
+}
+
+.results-section > h2, .results-section > h3 { margin: 1rem 0 .25rem; font-size: 1.125rem; line-height: 1.3; }
+.results-section + .results-section > h2 { margin-top: 1.5rem; padding-top: 1rem; border-top: 1px solid var(--rule); }
+.section-intro { margin: 0 0 .75rem; }
+
+.group { margin: 0 0 .75rem; padding-left: .75rem; border-left: 2px solid var(--rule); }
+.group-head { margin: 0 0 .5rem; font-weight: 700; }
+.group > .card:last-child { margin-bottom: 0; }
+
+/* One listing. The status tag is shown first (order); a close or possible match names its tier above it. */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: .25rem;
+  margin: 0 0 .75rem;
+  padding: 1rem 1rem .125rem .75rem;
+  border: 1px solid var(--rule);
+  border-left: 4px solid var(--blank-bar);
+  border-radius: 4px;
+}
+.card > * { margin: 0; }
+.card-ministry { border-left-color: var(--ministry-bar); }
+.card-uas { border-left-color: var(--uas-bar); }
+.card-other { border-left-color: var(--other-bar); }
+.tier-possible { padding-left: calc(.75rem + 3px); border: 1px dashed var(--dashed); }
+
+.card > .status { order: -1; margin-bottom: .25rem; font-size: .9375rem; }
+.tier-close > .reasons, .tier-possible > .reasons { order: -2; }
+.tag {
+  display: inline-block;
+  padding: .125rem .5rem;
+  font-size: .875rem;
+  line-height: 1.45;
+  font-weight: 700;
+  border: 1px solid;
+  border-radius: 3px;
+}
+.status-ministry .tag { color: var(--ministry-fg); background: var(--ministry-bg); border-color: var(--ministry-edge); }
+.status-uas .tag { color: var(--uas-fg); background: var(--uas-bg); border-color: var(--uas-edge); }
+.status-other .tag { color: var(--other-fg); background: var(--other-bg); border-color: var(--other-edge); }
+.status-blank .tag { color: var(--blank-fg); background: var(--blank-bg); border-color: var(--blank-edge); }
+.tier-possible .tag { background: transparent; }
+
+.card-title { font-size: 1.125rem; line-height: 1.3; font-weight: 700; }
+.as-written, .meta, .memo, .title-link, .extra, .section-name, .reasons, .matched-in, .notes, .moved, .hidden-flag, .where { font-size: .9375rem; }
+.as-written, .matched-in, .label { color: var(--muted); }
+.missing { color: var(--muted); font-style: italic; }
+.card .notes { padding-left: 1.25rem; }
+.moved, .hidden-flag { font-weight: 700; }
+.hidden-flag { padding-bottom: .75rem; }
+
+/* Where it is: ruled off at the foot of the card; the link has a 44px tap height. */
+.where { margin-top: .5rem; padding: .625rem 0; border-top: 1px solid var(--rule); }
+.where a { display: inline-block; margin: -.6875rem 0; padding: .6875rem 0; outline-offset: 0; }
+
+/* Text that comes from the sheet can be Arabic or messy. */
+.card-title, .as-written, .author, .meta, .memo, .extra, .section-name, .raw, .line > h2 {
+  unicode-bidi: plaintext;
+  overflow-wrap: anywhere;
+}
+
+/* Nothing found: the page's one warning treatment. */
+.no-results { margin: 0 0 1rem; padding-left: 1rem; border-left: 4px solid var(--ink); }
+.no-results > * { margin: 0 0 .5rem; }
+.no-results > :last-child { margin-bottom: 0; }
+.no-results-head { font-size: 1.125rem; line-height: 1.35; }
+.no-results .unloaded { font-weight: 700; }
+.no-results .hints { padding-left: 1.25rem; }
+.try p, .try ul, .try li { display: inline; margin: 0; padding: 0; }
+.try p::after { content: " "; white-space: pre-wrap; }
+.try li:not(:last-child)::after { content: "\00a0\00b7\0020"; white-space: pre-wrap; }
+.more-hints > summary { margin: -.375rem 0; }
+.more-hints .hints { margin: .25rem 0 0; }
+
+/* Reading list: one row per pasted line, its outcome at the right; a line with listings is followed by its cards. */
+.line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 1rem;
+  padding: .625rem 0;
+  border-top: 1px solid var(--rule);
+}
+.line > * { flex: 0 0 100%; min-width: 0; }
+.line > h2 { flex: 1 1 auto; margin: 0; font-size: 1rem; line-height: 1.5; font-weight: 400; }
+.line > .line-count, .line > .line-empty { flex: 0 1 auto; margin: 0; }
+.line-empty p { margin: 0; }
+.line-empty strong { font-weight: inherit; }
+.line-none > h2, .line-none > .line-empty { color: var(--muted); }
+.line-found { padding-bottom: 0; }
+.line-found > h2, .line-found > .line-count { font-weight: 700; }
+.line > .hits, .line > .hidden-by-filter, .line > .note, .line > .warning, .line > .hints { margin-top: .625rem; }
+.line > .hints { margin-bottom: 0; padding-left: 0; list-style: none; color: var(--muted); }
+.line > .results-section > h3 { font-size: 1rem; margin-top: .25rem; }
+
+/* Banned By filter: after the results, and only while there are listings (or the filter hides some). */
+.filter-box { margin: .5rem 0 0; }
+#results:empty + .filter-box { display: none; }
+#results:not(:has(.card, .hidden-by-filter)) + .filter-box { display: none; }
+.filter { min-width: 0; margin: 0; padding: .5rem 1rem 1rem; border: 1px solid var(--rule); border-radius: 4px; }
+.filter legend { padding: 0 .25rem; font-weight: 700; }
+.help-text { margin: 0 0 .75rem; font-size: .9375rem; color: var(--muted); }
+.filter-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: 0 0 .5rem; }
+.filter-codes { display: grid; grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr)); column-gap: 1rem; }
+.filter-codes .code { display: flex; align-items: center; gap: .5rem; min-height: 2.75rem; }
+.filter-codes input { flex: none; width: 1.25rem; height: 1.25rem; margin: 0; accent-color: var(--link); }
+.filter-codes label { flex: 1; padding: .5rem 0; }
+.filter-codes .count { color: var(--muted); }
+
+/* Footer: one privacy sentence, the sheet, and the rest behind "About this page". */
+.site-footer {
+  padding-top: .25rem;
+  padding-bottom: 2rem;
+  font-size: .875rem;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.privacy { margin: 0; }
+.privacy a { display: inline-block; margin: -.75rem 0 -.75rem .25rem; padding: .75rem 0; outline-offset: 0; }
+.about-panel { padding-left: 1rem; border-left: 4px solid var(--rule); }
+.about-panel p { margin: 0 0 .5rem; }
+.maintainer-notes h2 { margin: 1rem 0 .25rem; font-size: .875rem; line-height: 1.55; color: var(--ink); }
+.maintainer-notes ul { margin: 0; padding-left: 1.25rem; }
+.maintainer-notes li + li { margin-top: .25rem; }
+
+@media (min-width: 40em) {
+  html { font-size: 112.5%; }
+  .site-header, .page, .site-footer { padding-left: 24px; padding-right: 24px; }
+  .site-header { padding-top: 2rem; }
+  .question { font-size: 1.6667rem; }
+}

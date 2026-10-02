@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://docs.google.com https://*.googleusercontent.com https://script.google.com; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light dark">
+  <title>CensorSearch</title>
+  <meta name="description" content="Search the banned-materials Google Sheet by title, author or ISBN. The page reads the live sheet each time it opens and stores nothing.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="../../config.js"></script>
+  <script defer src="../config.local.js"></script>
+  <script defer src="../../src/sheet.js"></script>
+  <script defer src="../../src/engine.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <header class="site-header">
+    <p class="service-name">CensorSearch</p>
+  </header>
+
+  <main id="main" class="page">
+    <noscript>
+      <p class="noscript">CensorSearch needs JavaScript to read the list. Turn JavaScript on for this page, or search the Google Sheet itself.</p>
+    </noscript>
+
+    <div id="override-note" class="override-note" role="note" hidden></div>
+
+    <form id="search-form" class="search" role="search" aria-label="Search the list">
+      <h1 class="question"><label for="q">Check the banned list</label></h1>
+      <p id="q-hint" class="q-hint">Type a title, an author or an ISBN.</p>
+      <div class="field">
+        <textarea id="q" class="search-box" rows="1" dir="auto" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-describedby="q-hint"></textarea>
+        <details class="help">
+          <summary>Help<span class="visually-hidden"> with searching</span></summary>
+          <ul class="help-panel">
+            <li>Many listings name no author. If an author search finds nothing, search the title.</li>
+            <li>To check a reading list, paste it with one title on each line.</li>
+            <li>“Open in the sheet” works only for people with access to the sheet. If Google asks for access, switch to your school account.</li>
+          </ul>
+        </details>
+      </div>
+    </form>
+
+    <p id="status" class="status-line" data-phase="loading" tabindex="-1" aria-live="polite">Loading the list…</p>
+    <p id="status-warning" class="warning" aria-live="polite"></p>
+    <p id="status-actions" class="status-actions" hidden></p>
+
+    <p id="notice" class="notice" tabindex="-1" hidden></p>
+    <p id="summary" class="summary" aria-live="polite" aria-atomic="true"></p>
+    <div id="results" class="results"></div>
+
+    <details id="filter-box" class="filter-box" hidden>
+      <summary id="filter-summary">Filter by Banned By</summary>
+      <fieldset id="filter" class="filter">
+        <legend>Banned by</legend>
+        <p class="help-text">Untick a code to hide listings that are only under that code. Listings with a blank Banned By are always shown. The results always say how many are hidden.</p>
+        <p class="filter-actions">
+          <button type="button" id="filter-all">Tick all</button>
+          <button type="button" id="filter-none">Untick all</button>
+        </p>
+        <div id="filter-codes" class="filter-codes"></div>
+      </fieldset>
+    </details>
+  </main>
+
+  <footer class="site-footer">
+    <p class="privacy">Nothing you type is saved or sent. <a id="footer-sheet" hidden>Open the sheet</a></p>
+    <details class="about">
+      <summary>About this page</summary>
+      <div class="about-panel">
+        <p id="source" class="source"></p>
+        <p>“Updated as of” is the date written in the sheet by the people who keep the list. “Fetched” is the time this page last read the sheet.</p>
+        <p>The Google Sheet is the source of truth; this page only reads it. Nothing is stored: the list is fetched when the page opens and kept only in this browser tab, and what you type is searched in your browser and sent nowhere. <a id="footer-repo" hidden>Source code</a></p>
+        <section id="maintainer-notes" class="maintainer-notes" hidden>
+          <h2 id="maintainer-summary">Notes for the list's maintainers</h2>
+          <ul id="maintainer-list"></ul>
+        </section>
+      </div>
+    </details>
+  </footer>
+</body>
+</html>

@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://docs.google.com https://*.googleusercontent.com https://script.google.com; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="no-referrer">
+  <meta name="color-scheme" content="light dark">
+  <title>CensorSearch</title>
+  <meta name="description" content="Search the banned-materials Google Sheet by title, author or ISBN. The page reads the live sheet each time it opens and stores nothing.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="../../config.js"></script>
+  <script defer src="../config.local.js"></script>
+  <script defer src="../../src/sheet.js"></script>
+  <script defer src="../../src/engine.js"></script>
+  <script defer src="app.js"></script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="site-header">
+      <h1>CensorSearch</h1>
+    </header>
+
+    <main id="main" class="page">
+      <noscript>
+        <p class="noscript">This page needs JavaScript to read the list. Turn it on for this page, or search the Google Sheet itself.</p>
+      </noscript>
+
+      <div id="override-note" class="override-note" role="note" hidden></div>
+
+      <form id="search-form" class="search" role="search" aria-label="Search the list">
+        <label for="q" class="search-label">What are you checking?</label>
+        <p id="q-hint" class="search-hint">A title, an author or an ISBN</p>
+        <textarea id="q" class="search-box" rows="1" dir="auto" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search" aria-describedby="q-hint"></textarea>
+        <details id="search-help" class="help">
+          <summary><span class="help-button">Help<span class="visually-hidden"> with searching</span></span></summary>
+          <ul class="help-panel">
+            <li>No luck with an author? Try the title. Many entries have no author.</li>
+            <li>Checking a reading list? Paste it in, one title per line.</li>
+            <li>If Google asks for access when you open an entry, switch to your school account.</li>
+          </ul>
+        </details>
+      </form>
+
+      <p id="status" class="status-line" data-phase="loading" tabindex="-1" aria-live="polite">Loading the list…</p>
+      <p id="status-warning" class="warning" aria-live="polite"></p>
+      <p id="status-actions" class="status-actions" hidden></p>
+
+      <p id="notice" class="notice" tabindex="-1" hidden></p>
+      <p id="summary" class="summary" aria-live="polite" aria-atomic="true"></p>
+      <div id="results" class="results"></div>
+      <details id="filter-box" class="filter-box" hidden>
+        <summary id="filter-summary">Filter</summary>
+        <fieldset id="filter" class="filter">
+          <legend>Show entries listed under</legend>
+          <p class="filter-help">Untick a code to hide entries listed only under it. Entries with no code always show, and you are always told how many are hidden.</p>
+          <p class="filter-actions">
+            <button type="button" id="filter-all">Select all</button>
+            <button type="button" id="filter-none">Clear all</button>
+          </p>
+          <div id="filter-codes" class="filter-codes"></div>
+        </fieldset>
+      </details>
+    </main>
+
+    <footer class="site-footer">
+      <p>Nothing you type is saved or sent anywhere.</p>
+      <p id="source" class="source"></p>
+      <p class="footer-links"><a id="footer-sheet" hidden>Open the sheet</a> <a id="footer-repo" hidden>Source code</a></p>
+      <details id="maintainer-notes" class="maintainer-notes" hidden>
+        <summary id="maintainer-summary">For list maintainers</summary>
+        <ul id="maintainer-list"></ul>
+      </details>
+    </footer>
+  </div>
+</body>
+</html>

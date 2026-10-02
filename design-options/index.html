@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>CensorSearch design options</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="gallery.css">
+  <script defer src="options.js"></script>
+  <script defer src="gallery.js"></script>
+</head>
+<body>
+  <header class="bar">
+    <div class="bar-title">
+      <h1>CensorSearch design options</h1>
+      <p>Every frame is the real page with the real search. Type here once and all of them respond.</p>
+    </div>
+    <div class="bar-controls">
+      <label class="field">
+        <span>Search all</span>
+        <textarea id="all-q" rows="1" autocomplete="off" spellcheck="false"></textarea>
+      </label>
+      <div class="row" id="presets" role="group" aria-label="Example searches"></div>
+      <div class="row">
+        <div class="seg" role="group" aria-label="Frame width">
+          <button type="button" data-width="phone" aria-pressed="true">Phone</button>
+          <button type="button" data-width="desktop" aria-pressed="false">Desktop</button>
+        </div>
+        <div class="seg" role="group" aria-label="Colour scheme">
+          <button type="button" data-scheme="light" aria-pressed="true">Light</button>
+          <button type="button" data-scheme="dark" aria-pressed="false">Dark</button>
+        </div>
+      </div>
+    </div>
+  </header>
+  <main id="frames" class="frames" data-width="phone"></main>
+</body>
+</html>
