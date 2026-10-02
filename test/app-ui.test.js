@@ -268,6 +268,9 @@ test('harness: every element id the fake page uses exists in index.html', () => 
 test('loaded state, a card, and the no-results box', async () => {
   const p = await loaded();
   assert.match(p.text('status'), /^6 items · updated as of 1 January 2026 \(from the sheet\) · fetched \d\d:\d\d$/);
+  const sheetLink = p.$('status').querySelector('a');
+  assert.equal(sheetLink.textContent, 'from the sheet');
+  assert.match(sheetLink.href, /^https:\/\/docs\.google\.com\/spreadsheets\/d\//);
   await p.type('zebra tales');
   assert.equal(p.text('summary'), '1 listing found');
   const c = p.cards()[0];
@@ -333,14 +336,12 @@ test('"listed as" appears only when the title differs beyond whitespace (BROWSER
 // ------------------------------------------------------------------------------------------------
 // No results, keep typing, ISBN, semicolons, multi-line wording
 
-test('multi-line: lines without a listing get the why-it-may-differ text and tips (BROWSER-7)', async () => {
+test('multi-line: a line without a listing says so on its own row, with no shared block (BROWSER-7)', async () => {
   const p = await loaded();
   await p.type('zebra tales\nxyzzy plugh');
-  const t = p.text('results');
-  assert.match(t, /One line has no listing\. This does not mean the item is permitted\./);
-  assert.match(t, /another spelling, title or edition/);
-  assert.match(t, /the author's surname alone/);
-  assert.equal(p.$('results').querySelectorAll('.no-results').length, 1, 'one shared block');
+  assert.match(p.text('results'), /Line 2: “xyzzy plugh”No listing found/);
+  assert.equal(p.$('results').querySelectorAll('.no-results').length, 0, 'no shared block');
+  assert.equal(p.text('summary'), '2 lines: 1 with matches, 1 without');
 });
 
 test('multi-line: an error line is not counted as "no listing" (APPSHEET-12)', async () => {
@@ -419,7 +420,7 @@ test('config script path: a failed load still links to the sheet named by sheetU
   assert.match(p.text('status'), /Can't reach the sheet's script/);
   const links = p.$('status-actions').querySelectorAll('a');
   assert.deepEqual(links.map(a => [a.textContent, a.href]), [['Open the sheet', 'https://docs.google.com/spreadsheets/d/' + SID + '/edit?gid=0#gid=0']]);
-  assert.equal(p.$('footer-sheet').hidden, false);
+  assert.equal(p.$('footer-sheet').hidden, true, 'the footer link is never shown');
   assert.ok(p.$('status-actions').querySelector('button'), 'Retry');
 
   // With a ?script= link the sheet isn't known, so there is no sheet link.
@@ -738,7 +739,7 @@ test('a complete query ending in a 1–2 letter word gets the no-results box; a 
   const p = await loaded();
   for (const q of ['it ends with us', 'the wizard of oz']) {
     await p.type(q);
-    assert.equal(p.text('summary'), 'No listing found.', q);
+    assert.equal(p.text('summary'), 'No listing found. This does not mean the item is permitted.', q);
     const box = p.$('results').querySelector('.no-results');
     assert.ok(box, q);
     assert.match(box.textContent, /No listing found\. This does not mean the item is permitted\./);

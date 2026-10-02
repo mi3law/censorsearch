@@ -23,7 +23,7 @@
   const DELAY = 150, LONG_DELAY = 400;
   const TEXT = {
     loading: 'Loading the list…',
-    tooShort: 'Type at least 2 characters, or press Enter to search 1 character.',
+    tooShort: 'Keep typing, or press Enter to search one letter.',
     keepTyping: 'Keep typing…',
     truncated: 'Long text: matched on its first 12 main words.',
     noListing: 'No listing found. This does not mean the item is permitted.',
@@ -443,7 +443,7 @@
         done.then(() => {
           if (!isFocusLost()) return;
           const again = ui.actions.hidden ? null : ui.actions.querySelector('button');
-          (again || ui.status).focus();
+          if (again) again.focus(); else ui.status.focus({ preventScroll: true });
         });
       }
     });
@@ -489,11 +489,14 @@
   // Re-rendering replaces the status actions. Keyboard focus on one of them moves to its replacement, or to the status
   // line once there is none (while a Retry is loading, its click handler places focus when the load ends). The live
   // status lines are rewritten only when their words change, so a screen reader doesn't hear them again on every check.
+  // data-phase lets the stylesheet show the line under the box while loading or failed, and as small print below the
+  // results once loaded; so focus on it never scrolls the page.
   function renderStatus() {
     const a = document.activeElement;
     const focused = a && a !== ui.actions && within(a, ui.actions) ? a.textContent : null;
     const view = statusView();
-    setText(ui.status, view.status);
+    ui.status.setAttribute('data-phase', state.phase);
+    setStatus(view.status);
     setText(ui.warning, view.warning || '');
     const actions = arr(view.actions).filter(Boolean);
     ui.actions.replaceChildren(...actions);
@@ -501,10 +504,22 @@
     if (focused == null || !isFocusLost()) return;
     const again = ui.actions.hidden ? [] : Array.from(ui.actions.querySelectorAll('button, a'));
     const target = again.find(x => x.textContent === focused) || again[0] || (state.phase === 'loading' ? null : ui.status);
-    if (target) target.focus();
+    if (target === ui.status) target.focus({ preventScroll: true });
+    else if (target) target.focus();
   }
 
   const setText = (node, text) => { if (node.textContent !== text) node.textContent = text; };
+
+  // The loaded status line, with its "(from the sheet)" as the link that opens the sheet.
+  function setStatus(text) {
+    const mark = 'from the sheet';
+    const at = text.indexOf('(' + mark + ')');
+    const url = state.phase === 'loaded' || state.phase === 'partial' ? sheetLinkUrl() : null;
+    if (!url || at < 0) { setText(ui.status, text); return; }
+    const a = ui.status.querySelector('a');
+    if (ui.status.textContent === text && a && a.getAttribute('href') === httpsUrl(url)) return;
+    ui.status.replaceChildren(text.slice(0, at + 1), extLink(url, mark), text.slice(at + 1 + mark.length));
+  }
 
   function statusView() {
     if (state.phase === 'config') {
@@ -517,7 +532,7 @@
       return {
         status: failureText(arr(f.errors)),
         actions: [retryButton(), url ? ' ' : null, url ? extLink(url, 'Open the sheet') : null,
-          state.overridden ? ' · ' : null, state.overridden ? defaultPageLink('Use the default list') : null],
+          state.overridden ? el('span', { class: 'sep' }, ' · ') : null, state.overridden ? defaultPageLink('Use the default list') : null],
       };
     }
     const warn = [];
@@ -558,8 +573,8 @@
       ui.footerSheet.href = url;
       ui.footerSheet.target = '_blank';
       ui.footerSheet.rel = 'noopener noreferrer';
-      ui.footerSheet.hidden = false;
-    } else ui.footerSheet.hidden = true;
+    }
+    ui.footerSheet.hidden = true;   // not shown: "(from the sheet)" in the status line is the link to the sheet
   }
 
   // A warning above the search box whenever the page isn't showing its usual list, naming what it shows instead.
@@ -603,7 +618,7 @@
           str(state.source && state.source.url) + ') to trustedScripts in config.js.')));
       n++;
     }
-    ui.notesSummary.textContent = "Notes for the list's maintainers (" + n + ')';
+    ui.notesSummary.textContent = 'For list maintainers (' + n + ')';
     ui.notes.hidden = !state.data;
   }
 
@@ -645,9 +660,7 @@
 
   function updateFilterSummary() {
     const n = state.codes.length, off = state.unticked.size;
-    ui.filterSummary.textContent = off
-      ? 'Filter by Banned By: ' + fmtInt(off) + ' of ' + plural(n, 'code', 'codes') + ' unticked'
-      : 'Filter by Banned By (all ' + plural(n, 'code', 'codes') + ' shown)';
+    ui.filterSummary.textContent = off ? 'Filter on: ' + fmtInt(off) + ' of ' + fmtInt(n) + ' unticked' : 'Filter';
   }
 
   function setAllCodes(on) {
@@ -745,6 +758,7 @@
     state.cardEls = [];
     state.linkRows = [];
     state.sectionEls = new Map();
+    ui.summary.className = 'summary';
     ui.summary.textContent = '';
     if (!state.index) {
       if (state.phase === 'loading' && ui.box.value.trim()) {
@@ -785,27 +799,36 @@
 
   const hintsEl = hints => el('ul', { class: 'hints' }, ...hints.map(h => el('li', null, h)));
 
-  // What every "no listing" message carries: a tab that wasn't loaded (so wasn't searched), why the list may name the
-  // item differently, what to try (not "the ISBN" after an ISBN search), and the sheet as the source of truth.
-  function appendNoListingHelp(box, isbnQuery, hints) {
+  // What every "no listing" message carries: a tab that wasn't loaded (so wasn't searched), what to try (not "the ISBN"
+  // after an ISBN search), why the list may name the item differently (behind "Why it might be missed", with the
+  // engine's hints), and the sheet as the source of truth.
+  // A tab that wasn't loaded wasn't searched: said wherever a search finds no listing.
+  function unloadedNote() {
     const errs = state.data ? arr(state.data.errors) : [];
-    if (errs.length) {
-      const names = [...new Set(errs.map(e => str(e.tab).trim()).filter(Boolean))];
-      box.append(el('p', { class: 'unloaded' }, names.length
-        ? listText(names) + " couldn't be loaded, so " + (names.length === 1 ? "it wasn't" : "they weren't") + ' searched.'
-        : "Part of the list couldn't be loaded, so it wasn't searched."));
-    }
+    if (!errs.length) return null;
+    const names = [...new Set(errs.map(e => str(e.tab).trim()).filter(Boolean))];
+    return el('p', { class: 'unloaded' }, names.length
+      ? listText(names) + " couldn't be loaded, so " + (names.length === 1 ? "it wasn't" : "they weren't") + ' searched.'
+      : "Part of the list couldn't be loaded, so it wasn't searched.");
+  }
+
+  function appendNoListingHelp(box, isbnQuery, hints) {
+    const unloaded = unloadedNote();
+    if (unloaded) box.append(unloaded);
     if (isbnQuery && hints.length) box.append(hintsEl(hints));
     const fetched = state.data ? ' (the list was fetched at ' + hhmm(state.data.fetchedAt) + ')' : '';
-    box.append(el('p', null, 'The list may name it with another spelling, title or edition, or the sheet may have changed since this page loaded' + fetched + '.'));
-    box.append(el('p', null, 'Try:'));
-    box.append(el('ul', null,
-      el('li', null, "the author's surname alone"),
-      el('li', null, 'one distinctive word from the title'),
-      isbnQuery ? null : el('li', null, 'the ISBN')));
-    if (!isbnQuery && hints.length) box.append(hintsEl(hints));
+    box.append(el('div', { class: 'try' },
+      el('p', null, 'Try:'),
+      el('ul', null,
+        el('li', null, "the author's surname alone"),
+        el('li', null, 'one distinctive word from the title'),
+        isbnQuery ? null : el('li', null, 'the ISBN'))));
+    const why = el('details', { class: 'why' }, el('summary', null, 'Why it might be missed'),
+      el('p', null, 'The list may name it with another spelling, title or edition, or the sheet may have changed since this page loaded' + fetched + '.'));
+    if (!isbnQuery && hints.length) why.append(hintsEl(hints));
+    box.append(why);
     const url = sheetLinkUrl();
-    if (url) box.append(el('p', null, 'The sheet is the source of truth: ', extLink(url, 'open the sheet'), '.'));
+    if (url) box.append(el('p', { class: 'sheet-truth' }, 'The sheet is the source of truth. ', extLink(url, 'Open the sheet', 'button-link')));
   }
 
   function noResults(res) {
@@ -841,7 +864,11 @@
     if (possible.shown.length) summary.push(plural(possible.shown.length, 'possible match', 'possible matches'));
     if (prefix.shown.length) summary.push(plural(prefix.shown.length, 'ISBN starting with these digits', 'ISBNs starting with these digits'));
     if (hidden) summary.push((shown ? '' : 'No listing shown; ') + fmtInt(hidden) + ' hidden by the Banned By filter');
-    if (!shown && !hidden && res.state === 'ok') summary.push('No listing found.');
+    if (!shown && !hidden && res.state === 'ok') {
+      // The sign below says it; the live line (heard, not seen) carries the whole sentence, caveat included.
+      summary.push(TEXT.noListing);
+      ui.summary.className = 'summary visually-hidden';
+    }
     ui.summary.textContent = summary.join(' · ');
 
     if (res.truncated) out.append(el('p', { class: 'note' }, TEXT.truncated));
@@ -885,16 +912,17 @@
       const hidden = main.hidden + possible.hidden + prefix.hidden;
       const commonOnly = res.state === 'stopwordsOnly' && !shown && !hidden;
       hiddenTotal += hidden;
-      if (main.shown.length) withMatches++;
-      else if (main.hidden || (hidden && !shown)) hiddenOnly++;
-      else if (shown) possibleOnly++;
-      else if (res.state === 'error') failed++;
-      else if (commonOnly) notSearched++;
+      let outcome = 'none';   // for the row's marker
+      if (main.shown.length) { withMatches++; outcome = 'listed'; }
+      else if (main.hidden || (hidden && !shown)) { hiddenOnly++; outcome = 'hidden'; }
+      else if (shown) { possibleOnly++; outcome = 'possible'; }
+      else if (res.state === 'error') { failed++; outcome = 'error'; }
+      else if (commonOnly) { notSearched++; outcome = 'skipped'; }
       else without++;
 
       const id = 'line-' + (i + 1);
-      const sec = el('section', { class: 'line', 'aria-labelledby': id });
-      sec.append(el('h2', { id }, 'Line ' + (i + 1) + ': “' + ln.line + '”'));
+      const sec = el('section', { class: 'line', 'aria-labelledby': id, 'data-outcome': outcome });
+      sec.append(el('h2', { id }, el('span', { class: 'line-no' }, 'Line ' + (i + 1) + ': '), '“' + ln.line + '”'));
       const counts = [];
       if (main.shown.length) counts.push(plural(main.shown.length, 'listing found', 'listings found'));
       if (possible.shown.length) counts.push(plural(possible.shown.length, 'possible match', 'possible matches'));
@@ -916,8 +944,9 @@
         sec.append(el('div', { class: 'line-empty' }, el('p', null, 'Not searched: this line has only common words such as “the”.')));
       } else if (!shown && !hidden && res.state !== 'error') {
         const box = el('div', { class: 'line-empty' }, el('p', null, el('strong', null, 'No listing found')));
+        // Only an ISBN line keeps its own hint; the row itself says "No listing found".
         const hints = hintList(res, true);
-        if (hints.length) box.append(hintsEl(hints));
+        if (res.isbnQuery && hints.length) box.append(hintsEl([hints.shift()]));
         sec.append(box);
       }
       return sec;
@@ -931,21 +960,16 @@
     counts.push(fmtInt(without) + ' without');
     ui.summary.textContent = run.lines.length + ' lines: ' + counts.join(', ') +
       (hiddenTotal ? ' · ' + plural(hiddenTotal, 'listing', 'listings') + ' hidden by the Banned By filter' : '');
-    if (without) {
-      // One shared "why it may differ" block for every line without a listing.
-      const box = el('div', { class: 'no-results', role: 'region', 'aria-label': 'Lines with no listing' });
-      box.append(el('p', { class: 'no-results-head' }, el('strong', null,
-        (without === 1 ? 'One line has' : fmtInt(without) + ' lines have') + ' no listing. ' + TEXT.noListing.replace(/^No listing found\. /, ''))));
-      appendNoListingHelp(box, false, []);
-      out.append(box);
-    }
+    // Each line without a listing says so on its own row; there is no shared box above the rows.
+    const unloaded = without ? unloadedNote() : null;
+    if (unloaded) out.append(unloaded);
     out.append(...blocks);
   }
 
   // A titled results section with its count, first `limit` hits and a "Show all N" control.
   function section(o) {
     const id = 'sec-' + o.key.replace(/[^A-Za-z0-9_-]/g, '-');
-    const sec = el('section', { class: 'results-section', 'aria-labelledby': id });
+    const sec = el('section', { class: 'results-section section-' + o.key.split(':').pop(), 'aria-labelledby': id });
     sec.append(el('h' + o.level, { id }, o.title + ' (' + fmtInt(o.hits.length) + ')'));
     if (o.intro) sec.append(el('p', { class: 'section-intro' }, o.intro));
     appendHits(sec, o.key, o.hits, o.limit, o.level + 1, o.noun);
@@ -1030,7 +1054,7 @@
     const raw = str(row.bannedBy).trim();
     const codes = codesOf(row);
     const said = lvl === 'other' ? codes.join(' ') : codes.length === 1 ? codes[0] : '';
-    if (raw && foldCodes(raw) !== foldCodes(said)) st.append(' ', el('span', { class: 'raw' }, '(Banned By: ' + raw + ')'));
+    if (raw && foldCodes(raw) !== foldCodes(said)) st.append(' ', el('span', { class: 'raw' }, '(the sheet says: ' + raw + ')'));
     art.append(st);
 
     // Type · Year of Banning · ISBN
@@ -1068,11 +1092,14 @@
 
     // Why it matched
     const reasons = arr(hit.reasons).map(str).filter(Boolean);
-    if (hit.tier === 'close' && reasons.length) art.append(el('p', { class: 'reasons' }, el('span', { class: 'badge' }, reasons.join('; '))));
-    else if (hit.tier === 'possible') art.append(el('p', { class: 'reasons' }, 'Possible match: ' + (reasons.join('; ') || 'shares some of your words')));
+    if (hit.tier === 'close' && reasons.length) art.append(el('p', { class: 'reasons' }, el('span', { class: 'badge' }, 'Close match (' + reasons.join('; ') + ')')));
+    else if (hit.tier === 'possible') art.append(el('p', { class: 'reasons' }, 'Possible match (' + (reasons.join('; ') || 'shares some of your words') + '). Check it is your item.'));
     else if (reasons.length) art.append(el('p', { class: 'reasons' }, 'Why it matched: ' + reasons.join('; ')));
+    // "Matched in: title, author" repeats what the highlight shows, so it is kept for screen readers only; any other
+    // field (memo, type, Banned By) stays in view.
     const fields = arr(hit.fields).map(f => FIELD_NAMES[f] || f).filter(Boolean);
-    if (fields.length) art.append(el('p', { class: 'matched-in' }, 'Matched in: ' + [...new Set(fields)].join(', ')));
+    const plain = fields.every(f => f === FIELD_NAMES.title || f === FIELD_NAMES.author || f === FIELD_NAMES.isbn);
+    if (fields.length) art.append(el('p', { class: 'matched-in' + (plain ? ' visually-hidden' : '') }, 'Matched in: ' + [...new Set(fields)].join(', ')));
 
     // Notes from the engine, and a row that moved since the page loaded
     const notes = arr(hit.notes).map(str).filter(Boolean);
@@ -1087,7 +1114,7 @@
       link.append(el('span', { class: 'visually-hidden' }, ' (' + str(row.tab) + ' row ' + row.row + ')'));
       linkRow.set(link, row);
       state.linkRows.push({ el: link, row });
-      where.append(' · ', link);
+      where.append(el('span', { class: 'sep' }, ' · '), link);
     }
     art.append(where);
     if (row.hidden === true) art.append(el('p', { class: 'hidden-flag' }, "may be hidden by the sheet's filter"));
