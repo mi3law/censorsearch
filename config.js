@@ -10,11 +10,11 @@ window.CENSORSEARCH_CONFIG = {
   // Google sign-in: the OAuth client ID (…apps.googleusercontent.com; public, not a secret). When set, each visitor signs in
   // with Google and the page reads sheetUrl's tabs with their own access, so only people who can view the sheet can search it.
   // It takes precedence over scriptUrl. Setting it up: README.md, "Signing in".
-  googleClientId: '',
+  googleClientId: '640659635830-rthmbg5fvne57fgv39rk508q62qm6hgp.apps.googleusercontent.com',
   // Apps Script web app URL (https://script.google.com/macros/s/<id>/exec). When set, the page reads through it instead of the CSV
   // link above, and the script's own tab list decides which tabs are searched (see apps-script/README.md). sheetUrl should
   // then still name the same sheet: it is the "Open the sheet" link when the script can't be reached.
-  scriptUrl: 'https://script.google.com/macros/s/AKfycbx2qUWY6M585ZRUEF4uiDU0Wh9Ntwx0E5PGqZ8Pi8gsrEJ91O3q3bjyp7Tdp9c9MuRncg/exec',
+  scriptUrl: '',
   // The school's own Apps Script, when it is shared as a ?script= link instead of scriptUrl (keeping its address out of this
   // public file): list the code the page shows under "Notes for the list's maintainers" when opened with that link. Any other
   // ?script= link is marked on the page as not its usual list, with no links to the sheet it claims to read.
