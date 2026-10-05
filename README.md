@@ -2,7 +2,7 @@
 
 A single static web page that searches a school's banned-materials list, kept in a Google Sheet, more reliably than Ctrl+F. It tolerates moved articles ("Alchemist, The"), missing authors, typos, word order, punctuation and number variants, and links every result to its row in the sheet.
 
-No backend, no stored data, no accounts: the page reads the live sheet (read-only) each time it loads.
+No backend and no stored data: the page reads the live sheet (read-only) each time it loads. It needs no accounts of its own; for a list limited to people who can view the sheet, teachers sign in with their Google account ([Signing in](#signing-in)).
 
 **Try it:** <https://mi3law.github.io/censorsearch/> (served from the `main` branch).
 
@@ -17,7 +17,7 @@ Paste several titles on separate lines to check a reading list; each line is sea
 
 ## Pointing it at a sheet
 
-The page reads one of two ways. Both feed the same search.
+The page reads one of three ways. All feed the same search.
 
 1. **By link (default).** The sheet must be shared "Anyone with the link can view". Choose it and its tabs on the [settings page](#changing-the-settings), or try any sheet without changing anything by adding `?sheet=` and the sheet's link to the page address:
 
@@ -27,13 +27,36 @@ The page reads one of two ways. Both feed the same search.
 
    The sheet needs a header row (in its first 10 rows) with at least a Title column; columns are matched by header name. Without a tab id, the sheet's first tab is read; its row links select the row only when that tab is `gid=0`, otherwise they open the sheet. When the link points at a different spreadsheet from the settings, the page says plainly that it is showing another sheet, not its usual list.
 
-2. **Through the read-only Apps Script**, for a sheet that can't be shared by link (the school's own sheet). Deploy [apps-script/Code.gs](apps-script/Code.gs) under an account with Viewer access to the sheet, following [apps-script/README.md](apps-script/README.md), then choose "Through the Apps Script reader" on the [settings page](#changing-the-settings) and paste its `/exec` address, so the plain page address reads it (recommended for the school's list). Alternatively open the page with `?script=<the /exec link>`: a script address the page doesn't know is shown with a warning and no sheet or row links, until its code (shown in the page's maintainer notes) is added under Advanced, "Trusted script codes", on the settings page. That keeps the address itself out of this repository.
+2. **With Google sign-in**, so that only people who can view the sheet can search it (recommended for the school's list). Each teacher signs in with their Google account and the page reads the sheet with their own access: Google answers only if that account can open the sheet. The sheet needn't be shared by link. Setting it up takes one Google Cloud project; see [Signing in](#signing-in).
+
+3. **Through the read-only Apps Script**, for a sheet that can't be shared by link, when anyone with the page's link may search it. Deploy [apps-script/Code.gs](apps-script/Code.gs) under an account with Viewer access to the sheet, following [apps-script/README.md](apps-script/README.md), then choose "Through the Apps Script reader" on the [settings page](#changing-the-settings) and paste its `/exec` address, so the plain page address reads it. Alternatively open the page with `?script=<the /exec link>`: a script address the page doesn't know is shown with a warning and no sheet or row links, until its code (shown in the page's maintainer notes) is added under Advanced, "Trusted script codes", on the settings page. That keeps the address itself out of this repository.
 
 The page shows which sheet it is reading, and a link back to the default list when an override is in use.
 
 The settings list the tabs to search by tab id, which survives renames (v1: the main tab only). To add a tab, such as the test sheet's Other Materials tab (tab id `1111920478`), open that tab in the sheet, copy its address and paste it under "Add a tab from its link" on the settings page.
 
 [aliases.json](aliases.json) holds names the sheet doesn't contain (pen names, acronyms, alternate titles). Searching one name also searches the others, and those results are labelled "via alias".
+
+## Signing in
+
+With sign-in, the page asks each visitor to sign in with Google before it reads anything. It asks Google for one permission, to see Google Sheets (read-only), and uses it only to read the list. Google then answers only if that account can view the sheet, so the list's own sharing decides who can search it: add or remove someone in the sheet's Share box and the page follows. Nothing runs on a server of ours: the page is still a static page on GitHub Pages.
+
+The sign-in lasts about an hour. After that the list already on screen stays searchable, and the page asks to sign in again before it reads the sheet again.
+
+### Setting it up (once)
+
+Google needs to know which site may ask teachers to sign in. That registration lives in a Google Cloud project; it runs nothing and costs nothing. Do this signed in with a school account:
+
+1. Open [console.cloud.google.com](https://console.cloud.google.com), click the project picker, then **New project**. Name it `CensorSearch` and keep **Location** on the school's organization.
+2. In the project: ☰, **APIs & Services**, **OAuth consent screen** (Google Auth Platform), **Get started**. App name `CensorSearch`, your school address as support email, **Audience: Internal**. Internal means only the school's Google accounts can sign in, and Google doesn't need to review the app.
+3. **APIs & Services**, **Library**: find **Google Sheets API** and click **Enable**.
+4. **Clients**, **Create client**, **Web application**. Under **Authorized JavaScript origins** add the page's address without a path, `https://mi3law.github.io` for this copy (and `http://localhost:8765` to test locally). No redirect URIs. Copy the **Client ID**, which ends in `.apps.googleusercontent.com`. It is public; never use or share the client secret shown beside it.
+5. On the [settings page](#changing-the-settings), choose **With Google sign-in**, paste the client ID, keep the sheet link and tabs, then check the list (you sign in yourself) and save.
+6. If the list was read through the Apps Script before, archive that deployment once sign-in works (in the script: **Deploy**, **Manage deployments**, **Archive**). Until then it keeps answering anyone who has its address, which is public in this repository's history.
+
+If a step says you need permission, or a teacher's sign-in says the school's settings don't allow the app, the school's Google admin has to allow it (for Internal apps this is rare).
+
+For sign-in to keep people out, the sheet itself must not be shared "Anyone with the link can view": the settings page warns when it is.
 
 ## Changing the settings
 
@@ -66,14 +89,15 @@ You can still edit [config.js](config.js) directly on GitHub (or in a clone) and
 
 | File | What it does |
 | --- | --- |
-| [index.html](index.html), [styles.css](styles.css) | The page. A strict Content-Security-Policy allows only this site and Google's sheet endpoints. |
-| [config.js](config.js) | The only settings: sheet link, tabs, optional Apps Script link and trusted script codes, the school's Banned By code. Changed on the settings page or by hand. |
+| [index.html](index.html), [styles.css](styles.css) | The page. A strict Content-Security-Policy allows only this site, Google's sheet endpoints and Google sign-in. |
+| [config.js](config.js) | The only settings: sheet link, tabs, the optional sign-in client ID, the optional Apps Script link and trusted script codes, the school's Banned By code. Changed on the settings page or by hand. |
 | [settings.html](settings.html), [src/settings.js](src/settings.js) | The settings page: shows the settings in plain words, checks the sheet with new ones, shows the changes to config.js and saves it through GitHub's API with a token pasted for each save. It refuses to work inside another page. |
-| [src/sheet.js](src/sheet.js) | Reads the sheet: CSV by link or the Apps Script JSON, finds the header row, maps columns by name, keeps exact row numbers, derives the status from Banned By. |
+| [src/sheet.js](src/sheet.js) | Reads the sheet: CSV by link, the Google Sheets API with a visitor's sign-in, or the Apps Script JSON; finds the header row, maps columns by name, keeps exact row numbers, derives the status from Banned By. |
+| [src/signin.js](src/signin.js) | Google sign-in: loads Google Identity Services only in sign-in mode and keeps the visitor's read-only token in memory. |
 | [src/engine.js](src/engine.js) | The search: one normalizer for cells and queries, alternate forms, an in-memory index and the tiered matcher. Ported from the prototype, plus the PRD's v1 rules. |
 | [src/app.js](src/app.js) | The page's behaviour: load states, search as you type, results, the Banned By filter, freshness checks. |
 | [apps-script/](apps-script/) | The read-only fallback for sheets that can't be link-shared. |
-| [test/](test/) | `node:test` suites: engine cases for every PRD rule, the prototype's 180 queries, the sheet loader, the Apps Script against a mocked Google, the settings page against a mocked GitHub. |
+| [test/](test/) | `node:test` suites: engine cases for every PRD rule, the prototype's 180 queries, the sheet loader, sign-in and the Sheets API against a mocked Google, the Apps Script against a mocked Google, the settings page against a mocked GitHub. |
 
 No dependencies and no build step. The page must be served over https (or from `localhost`); opened from disk, Google refuses the request.
 
@@ -93,4 +117,4 @@ The sample list is gitignored. Put its `.xlsx` export in the repo root (or set `
 
 ## Privacy
 
-The page fetches the sheet when it opens and keeps the list only in the open tab. What you type is searched in your browser and sent nowhere: it never goes into the page address, and nothing is written to browser storage. There are no accounts and no analytics. The settings page sends the token you paste only to GitHub (api.github.com), for the save you ask for, and keeps it nowhere: the field is cleared once the save is done.
+The page fetches the sheet when it opens and keeps the list only in the open tab. What you type is searched in your browser and sent nowhere: it never goes into the page address, and nothing is written to browser storage. There are no accounts of the page's own and no analytics. With sign-in, Google gives the page a token that can only read Google Sheets and runs out after about an hour; the page keeps it in the open tab, uses it only to read the list from Google, and never stores or shows it. The settings page sends the token you paste only to GitHub (api.github.com), for the save you ask for, and keeps it nowhere: the field is cleared once the save is done.

@@ -9,12 +9,12 @@
 // cleared once the save succeeds.
 (function (root, factory) {
   if (typeof module === 'object' && module.exports) {
-    module.exports = factory(require('./sheet.js'));
+    module.exports = factory(require('./sheet.js'), require('./signin.js'));
   } else {
-    root.CensorSettings = factory(root.CensorSheet);
+    root.CensorSettings = factory(root.CensorSheet, root.CensorSignIn);
     if (root.document) root.CensorSettings.start(root);
   }
-})(typeof self !== 'undefined' ? self : this, function (Sheet) {
+})(typeof self !== 'undefined' ? self : this, function (Sheet, SignIn) {
   'use strict';
 
   const str = v => (v == null ? '' : String(v));
@@ -26,8 +26,8 @@
   // config.js text. buildConfigJs writes the file in exactly the repository's layout and comments, so a config that
   // came from it (or from the repository's own config.js) comes back byte for byte.
 
-  const KNOWN_KEYS = ['sheetUrl', 'tabs', 'scriptUrl', 'trustedScripts', 'schoolCode', 'aliasesUrl', 'repoUrl'];
-  const DEFAULTS = { sheetUrl: '', tabs: [], scriptUrl: '', trustedScripts: [], schoolCode: 'UAS', aliasesUrl: 'aliases.json', repoUrl: '' };
+  const KNOWN_KEYS = ['sheetUrl', 'tabs', 'googleClientId', 'scriptUrl', 'trustedScripts', 'schoolCode', 'aliasesUrl', 'repoUrl'];
+  const DEFAULTS = { sheetUrl: '', tabs: [], googleClientId: '', scriptUrl: '', trustedScripts: [], schoolCode: 'UAS', aliasesUrl: 'aliases.json', repoUrl: '' };
   const TABS_COMMENT_COLUMN = 48;
   // Written after the tabs only while they are still v1's (the test sheet's main tab), which the comment is about.
   const TABS_COMMENT = "// v1: main tab only; add { gid: '1111920478', name: 'Other Materials' } to search it too";
@@ -38,8 +38,16 @@
       '// Anyone can also try another sheet without editing it: add ?sheet=<Google Sheets link> or ?script=<Apps Script /exec link>',
       '// to the page address. The search text itself never goes into the address.',
     ],
-    sheetUrl: ['  // The Google Sheet read by link (the default path). It must be shared "Anyone with the link can view".'],
+    sheetUrl: [
+      '  // The Google Sheet. Read by link (the default path), it must be shared "Anyone with the link can view"; signed in (see',
+      '  // googleClientId), each visitor reads it with their own Google account instead.',
+    ],
     tabs: ["  // Tabs to search, by tab id (the number after gid= in the tab's link), which survives renames; `name` is how results cite the tab."],
+    googleClientId: [
+      '  // Google sign-in: the OAuth client ID (…apps.googleusercontent.com; public, not a secret). When set, each visitor signs in',
+      "  // with Google and the page reads sheetUrl's tabs with their own access, so only people who can view the sheet can search it.",
+      '  // It takes precedence over scriptUrl. Setting it up: README.md, "Signing in".',
+    ],
     scriptUrl: [
       '  // Apps Script web app URL (https://script.google.com/macros/s/<id>/exec). When set, the page reads through it instead of the CSV',
       "  // link above, and the script's own tab list decides which tabs are searched (see apps-script/README.md). sheetUrl should",
@@ -120,6 +128,7 @@
     out.push(tabs === "[{ gid: '0', name: 'Sheet1' }]" && sheet && sheet.id === V1_SHEET_ID
       ? tabsLine + ' '.repeat(Math.max(2, TABS_COMMENT_COLUMN - tabsLine.length)) + TABS_COMMENT
       : tabsLine);
+    out.push(...COMMENTS.googleClientId, '  googleClientId: ' + jsString(get('googleClientId')) + ',');
     out.push(...COMMENTS.scriptUrl, '  scriptUrl: ' + jsString(get('scriptUrl')) + ',');
     out.push(...COMMENTS.trustedScripts, '  trustedScripts: ' + listText(get('trustedScripts')) + ',');
     out.push(...COMMENTS.schoolCode(get('schoolCode')), '  schoolCode: ' + jsString(get('schoolCode')) + ',');
@@ -152,7 +161,7 @@
 
   // ---------------------------------------------------------------------------------------------
   // Validation: form values -> { cfg, errors }. Errors are { field, message } with field one of mode, sheetUrl, tabs,
-  // tabs.<i>.gid, tabs.<i>.name, scriptUrl, schoolCode, trustedScripts, aliasesUrl, repoUrl (in the form's order).
+  // tabs.<i>.gid, tabs.<i>.name, googleClientId, scriptUrl, schoolCode, trustedScripts, aliasesUrl, repoUrl (in the form's order).
 
   const GID_RE = /^\d{1,12}$/;
   const HEX64_RE = /^[0-9a-f]{64}$/i;
@@ -171,6 +180,9 @@
     nameMissing: 'Give the tab a name: results say which tab they come from by this name.',
     nameControl: "The name can't contain line breaks or other control characters.",
     nameTaken: 'Another tab already has this name. Results say which tab they come from by its name, so give each tab its own.',
+    clientMissing: "Paste the sign-in client ID from the Google Cloud console (Clients). It ends in .apps.googleusercontent.com.",
+    clientBad: "This isn't a Google sign-in client ID. It looks like 123456789012-abc….apps.googleusercontent.com: copy the Client ID from the Google Cloud console, under Clients.",
+    clientSecret: "This is the client secret, which must stay private: don't save it here or share it. Paste the Client ID instead, which ends in .apps.googleusercontent.com.",
     scriptMissing: "Paste the script's Web app URL. It ends in /exec.",
     scriptBad: "This isn't an Apps Script web app address. It looks like https://script.google.com/macros/s/…/exec: copy the Web app URL from Deploy, Manage deployments.",
     scriptDev: "This is the script's test address (it ends in /dev), which works only for the script's editors. Use the Web app URL that ends in /exec.",
@@ -213,18 +225,19 @@
       .map(t => (t.name != null ? { gid: str(t.gid), name: str(t.name) } : { gid: str(t.gid) }));
   }
 
-  // form: { mode: 'link'|'script', sheetUrl, tabs: [{ gid, name }], scriptUrl, schoolCode, trustedScripts (text, one per
-  // line, or a list), aliasesUrl, repoUrl, extra (settings kept as they are), original (the config being edited) }.
+  // form: { mode: 'link'|'signin'|'script', sheetUrl, tabs: [{ gid, name }], googleClientId, scriptUrl, schoolCode,
+  // trustedScripts (text, one per line, or a list), aliasesUrl, repoUrl, extra (settings kept as they are), original (the
+  // config being edited) }.
   // A value typed exactly as it is in the original is kept as written there; a new one is written in its plain form.
   function validate(form) {
     const f = form || {};
     const orig = isObj(f.original) ? f.original : {};
     const errors = [];
     const err = (field, message) => errors.push({ field, message });
-    const mode = f.mode === 'script' || f.mode === 'link' ? f.mode : null;
+    const mode = f.mode === 'script' || f.mode === 'link' || f.mode === 'signin' ? f.mode : null;
     if (!mode) err('mode', MSG.mode);
 
-    // Sheet link: needed to read by link; through the script it is the "Open the sheet" link.
+    // Sheet link: needed to read by link or signed in; through the script it is the "Open the sheet" link.
     const sheetIn = str(f.sheetUrl).trim();
     let sheetUrl = '';
     if (sheetIn) {
@@ -257,6 +270,16 @@
         tabs.push({ gid, name });
       });
       if (!rows.length) err('tabs', MSG.tabsMissing);
+    }
+
+    // Sign-in client ID: only in the signed-in mode (each mode leaves the others' settings empty).
+    let googleClientId = '';
+    if (mode === 'signin') {
+      const cIn = str(f.googleClientId).trim();
+      if (!cIn) err('googleClientId', MSG.clientMissing);
+      else if (/^GOCSPX-/i.test(cIn)) err('googleClientId', MSG.clientSecret);
+      else if (!SignIn.isClientId(cIn)) err('googleClientId', MSG.clientBad);
+      else googleClientId = cIn;
     }
 
     let scriptUrl = '';
@@ -309,7 +332,7 @@
       else repoUrl = sameAs(orig.repoUrl, repoIn) ? orig.repoUrl : r.url;
     }
 
-    const cfg = { sheetUrl, tabs, scriptUrl, trustedScripts, schoolCode, aliasesUrl, repoUrl };
+    const cfg = { sheetUrl, tabs, googleClientId, scriptUrl, trustedScripts, schoolCode, aliasesUrl, repoUrl };
     const extra = isObj(f.extra) ? f.extra : {};
     for (const k of extraKeys(extra)) cfg[k] = extra[k];
     return { cfg, errors };
@@ -319,15 +342,22 @@
   function sourceFor(cfg) {
     const c = cfg || {};
     const p = Sheet.parseSheetUrl(str(c.sheetUrl));
+    const tabsOf = () => {
+      const tabs = (Array.isArray(c.tabs) ? c.tabs : []).filter(t => t && t.gid != null)
+        .map(t => ({ gid: String(t.gid), name: t.name ? String(t.name) : null }));
+      return tabs.length ? tabs : [{ gid: p.gid, name: null }];
+    };
+    if (str(c.googleClientId).trim()) {
+      if (!SignIn.isClientId(c.googleClientId) || !p) return null;
+      return { kind: 'api', sheetId: p.id, tabs: tabsOf() };
+    }
     if (c.scriptUrl) {
       const url = Sheet.parseScriptUrl(str(c.scriptUrl));
       if (!url) return null;
       return Object.assign({ kind: 'script', url, tabs: null }, p ? { sheetId: p.id, sheetGid: p.gid } : {});
     }
     if (!p) return null;
-    const tabs = (Array.isArray(c.tabs) ? c.tabs : []).filter(t => t && t.gid != null)
-      .map(t => ({ gid: String(t.gid), name: t.name ? String(t.name) : null }));
-    return { kind: 'csv', sheetId: p.id, tabs: tabs.length ? tabs : [{ gid: p.gid, name: null }] };
+    return { kind: 'csv', sheetId: p.id, tabs: tabsOf() };
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -636,7 +666,8 @@
 
     const ui = {
       pageStatus: $('page-status'), currentNote: $('current-note'), currentList: $('current-list'),
-      form: $('settings-form'), modeFieldset: $('mode-fieldset'), modeLink: $('mode-link'), modeScript: $('mode-script'),
+      form: $('settings-form'), modeFieldset: $('mode-fieldset'), modeLink: $('mode-link'), modeSignin: $('mode-signin'), modeScript: $('mode-script'),
+      clientField: $('client-field'), clientId: $('client-id'),
       sheetUrl: $('sheet-url'), sheetHelp: $('sheet-url-help'), sheetOptional: $('sheet-url-optional'), sheetHint: $('sheet-url-hint'),
       tabsFieldset: $('tabs-fieldset'), tabList: $('tab-list'), tabAdd: $('tab-add'),
       tabLink: $('tab-link'), tabLinkAdd: $('tab-link-add'), tabLinkError: $('tab-link-error'), tabLinkNote: $('tab-link-note'),
@@ -665,6 +696,9 @@
       hintKey: '',
       picked: null,        // { row, gid }: the row pickUpGid filled in from the sheet link, while its tab id is unchanged
       note: null,          // { gid, fromSheet }: the tab id the note under "Add a tab from its link" is about
+      signIn: null,        // { clientId, client, chooseAccount } for the signed-in check: the maintainer's own sign-in, in memory
+      gisLoading: null,    // while Google's sign-in script loads
+      gisError: null,      // why it didn't load, until the next try
     };
     const rows = [];       // tab rows: { li, gid, name, gidError, nameError, remove, numbers }
 
@@ -701,7 +735,8 @@
     const hhmm = d => pad2(d.getHours()) + ':' + pad2(d.getMinutes());
     const sentence = s => { const t = str(s).trim(); return !t || /[.!?…]["”’)]*$/.test(t) ? t : t + '.'; };
     const shortId = id => (str(id).length > 14 ? str(id).slice(0, 6) + '…' + str(id).slice(-4) : str(id));
-    const mode = () => (ui.modeScript.checked ? 'script' : ui.modeLink.checked ? 'link' : '');
+    const mode = () => (ui.modeScript.checked ? 'script' : ui.modeSignin.checked ? 'signin' : ui.modeLink.checked ? 'link' : '');
+    const tabsMode = () => mode() === 'link' || mode() === 'signin';
     const button = (label, onClick) => { const b = el('button', { type: 'button' }, label); b.addEventListener('click', onClick); return b; };
 
     // -------------------------------------------------------------------------------------------
@@ -762,7 +797,21 @@
       const item = (term, ...desc) => list.append(el('dt', null, term), el('dd', null, ...desc));
       const sheet = Sheet.parseSheetUrl(str(c.sheetUrl));
       const sheetLink = sheet ? extLink(Sheet.sheetUrl(sheet.id, sheet.gid), 'this Google Sheet') : null;
-      if (c.scriptUrl) {
+      const tabsItem = () => {
+        const tabs = copyTabs(c.tabs);
+        item('Tabs searched', tabs.length
+          ? listWords(tabs.map(t => (t.name ? t.name : 'unnamed') + ' (tab id ' + t.gid + ')')) + '.'
+          : "The sheet's first tab.");
+      };
+      if (str(c.googleClientId).trim()) {
+        const ok = SignIn.isClientId(c.googleClientId);
+        item('How the page reads the list', ok && sheet
+          ? ['With Google sign-in: each visitor signs in and reads ', sheetLink, ' (sheet ' + shortId(sheet.id) + ') with their own Google account, so only people who can view it can search it.']
+          : ok ? "With Google sign-in, but the sheet link isn't a Google Sheets link, so the search page can't load the list."
+            : "With Google sign-in, but the client ID isn't valid, so the search page can't load the list.");
+        item('Sign-in client ID', str(c.googleClientId) + '.');
+        tabsItem();
+      } else if (c.scriptUrl) {
         const u = Sheet.parseScriptUrl(str(c.scriptUrl));
         const id = u ? (u.match(/\/s\/([^/]+)\/exec$/) || [])[1] : '';
         item('How the page reads the list', u
@@ -773,10 +822,7 @@
         item('How the page reads the list', sheet
           ? ['By link, from ', sheetLink, ' (sheet ' + shortId(sheet.id) + '), shared "Anyone with the link can view".']
           : "By link, but the sheet link isn't a Google Sheets link, so the search page can't load the list.");
-        const tabs = copyTabs(c.tabs);
-        item('Tabs searched', tabs.length
-          ? listWords(tabs.map(t => (t.name ? t.name : 'unnamed') + ' (tab id ' + t.gid + ')')) + '.'
-          : "The sheet's first tab.");
+        tabsItem();
       }
       item("School's Banned By code", str(c.schoolCode || DEFAULTS.schoolCode) + '.');
       const trusted = Array.isArray(c.trustedScripts) ? c.trustedScripts.length : 0;
@@ -844,9 +890,12 @@
     // The form
 
     function fillForm(c) {
-      const script = !!str(c.scriptUrl).trim();
+      const signin = !!str(c.googleClientId).trim();
+      const script = !signin && !!str(c.scriptUrl).trim();
+      ui.modeSignin.checked = signin;
       ui.modeScript.checked = script;
-      ui.modeLink.checked = !script;
+      ui.modeLink.checked = !signin && !script;
+      ui.clientId.value = str(c.googleClientId);
       ui.sheetUrl.value = str(c.sheetUrl);
       rows.splice(0).forEach(r => r.li.remove());
       copyTabs(c.tabs).forEach(t => addRow(t.gid, t.name));
@@ -862,6 +911,7 @@
         mode: mode(),
         sheetUrl: ui.sheetUrl.value,
         tabs: rows.map(r => ({ gid: r.gid.value, name: r.name.value })),
+        googleClientId: ui.clientId.value,
         scriptUrl: ui.scriptUrl.value,
         schoolCode: ui.schoolCode.value,
         trustedScripts: ui.trusted.value,
@@ -879,6 +929,7 @@
         case 'mode': return { input: ui.modeLink, describe: ui.modeFieldset, error: $('mode-error'), help: null };
         case 'sheetUrl': return simple(ui.sheetUrl, 'sheet-url-error', 'sheet-url-help');
         case 'tabs': return { input: ui.tabAdd, describe: ui.tabsFieldset, error: $('tabs-error'), help: 'tabs-help' };
+        case 'googleClientId': return simple(ui.clientId, 'client-id-error', 'client-id-help');
         case 'scriptUrl': return simple(ui.scriptUrl, 'script-url-error', 'script-url-help');
         case 'schoolCode': return simple(ui.schoolCode, 'school-code-error', 'school-code-help');
         case 'trustedScripts': return simple(ui.trusted, 'trusted-scripts-error', 'trusted-scripts-help', true);
@@ -895,7 +946,7 @@
       }
     }
 
-    const FIELD_KEYS = ['mode', 'sheetUrl', 'tabs', 'scriptUrl', 'schoolCode', 'trustedScripts', 'aliasesUrl', 'repoUrl'];
+    const FIELD_KEYS = ['mode', 'sheetUrl', 'tabs', 'googleClientId', 'scriptUrl', 'schoolCode', 'trustedScripts', 'aliasesUrl', 'repoUrl'];
 
     function shownErrors(errors) {
       return errors.filter(e => {
@@ -932,12 +983,16 @@
 
     function applyMode() {
       const m = mode();
-      ui.tabsFieldset.hidden = m !== 'link';
+      ui.tabsFieldset.hidden = !tabsMode();
+      ui.clientField.hidden = m !== 'signin';
       ui.scriptField.hidden = m !== 'script';
       ui.sheetOptional.hidden = m !== 'script';
       setText(ui.sheetHelp, m === 'script'
         ? 'The sheet the script reads. The search page links to it as "Open the sheet", including when the script can\'t be reached.'
-        : 'The Google Sheet\'s address, copied from the browser\'s address bar while the sheet is open. It must be shared "Anyone with the link can view".');
+        : m === 'signin'
+          ? 'The Google Sheet\'s address, copied from the browser\'s address bar while the sheet is open. It doesn\'t need to be shared by link: each visitor reads it with their own Google account.'
+          : 'The Google Sheet\'s address, copied from the browser\'s address bar while the sheet is open. It must be shared "Anyone with the link can view".');
+      if (m === 'signin') prepareSignIn();
     }
 
     // The note under "Add a tab from its link", and the tab id it is about (update() clears it once that is gone).
@@ -950,7 +1005,7 @@
     // listed already, renderSheetHint offers to add it instead. Typing a link fires this on every key, so the row filled
     // in follows the link (gid=1, gid=11, …) until the maintainer changes its tab id.
     function pickUpGid() {
-      if (mode() !== 'link') return;
+      if (!tabsMode()) return;
       const pk = state.picked;
       const picked = pk && rows.includes(pk.row) && pk.row.gid.value === pk.gid ? pk.row : null;
       if (!picked && rows.some(r => r.gid.value.trim())) return;
@@ -963,7 +1018,7 @@
     }
 
     function renderSheetHint() {
-      const p = mode() === 'link' ? Sheet.parseSheetUrl(ui.sheetUrl.value) : null;
+      const p = tabsMode() ? Sheet.parseSheetUrl(ui.sheetUrl.value) : null;
       const show = !!(p && p.gid && !rows.some(r => r.gid.value.trim() === p.gid));
       const key = show ? p.gid : '';
       if (key === state.hintKey) return;
@@ -1150,6 +1205,30 @@
       }
     }
 
+    // The signed-in check reads the sheet with the maintainer's own Google sign-in (kept in memory for this page only).
+    // Google's script loads as soon as that mode is chosen, so the check's click can open the sign-in window at once.
+    function signInFor(clientId) {
+      if (!state.signIn || state.signIn.clientId !== clientId) state.signIn = { clientId, client: SignIn.create(win, clientId), chooseAccount: false };
+      return state.signIn;
+    }
+
+    // A script that didn't load is tried again only when asked (retry), so its error stays on screen until then.
+    function prepareSignIn(retry) {
+      if (state.gisLoading || SignIn.isReady(win) || (state.gisError && !retry)) return;
+      state.gisError = null;
+      state.gisLoading = SignIn.loadGis(win).then(() => { state.gisLoading = null; }, e => { state.gisLoading = null; state.gisError = e.message; });
+    }
+
+    // Whether the sheet can also be read by link, without signing in (then sign-in doesn't keep anyone out).
+    async function readableByLink(source) {
+      try {
+        const r = await Sheet.load({ kind: 'csv', sheetId: source.sheetId, tabs: source.tabs }, { fetch: win.fetch.bind(win), schoolCode: 'UAS' });
+        return r.rows.length > 0;
+      } catch (e) {
+        return false;
+      }
+    }
+
     function checkedStatus() {
       const c = state.checked;
       return 'Checked at ' + hhmm(c.at) + ': ' + plural(c.tabs, 'tab', 'tabs') + ', ' + plural(c.items, 'item', 'items') + ', no problems' +
@@ -1170,6 +1249,18 @@
       }
       const text = buildConfigJs(v.cfg);
       const source = sourceFor(v.cfg);
+      // Signed in: sign in now, straight from the click (before any await), so the browser allows Google's window.
+      const auth = source.kind === 'api' ? signInFor(v.cfg.googleClientId) : null;
+      let signingIn = null;
+      if (auth && !auth.client.token()) {
+        if (!auth.client.ready()) {
+          const error = state.gisError;
+          prepareSignIn(true);
+          setText(ui.checkStatus, error ? error + ' Check the list again to try once more.' : 'Google sign-in is still loading. Check the list again in a moment.');
+          return;
+        }
+        signingIn = auth.client.signIn({ chooseAccount: auth.chooseAccount });
+      }
       const run = ++state.checkRun;
       state.checking = true;
       state.checked = null;
@@ -1177,16 +1268,35 @@
       ui.checkButton.setAttribute('aria-disabled', 'true');
       ui.checkResults.replaceChildren();
       ui.checkResults.classList.remove('stale');
+      if (signingIn) {
+        setText(ui.checkStatus, 'Signing in with Google…');
+        try {
+          await signingIn;
+        } catch (e) {
+          state.checking = false;
+          ui.checkButton.removeAttribute('aria-disabled');
+          if (run === state.checkRun) setText(ui.checkStatus, "Couldn't check the list: " + e.message);
+          return;
+        }
+      }
       setText(ui.checkStatus, 'Checking the list…');
-      const [result, aliases] = await Promise.all([
-        Promise.resolve().then(() => Sheet.load(source, { fetch: win.fetch.bind(win), schoolCode: v.cfg.schoolCode })).catch(() => (
+      const [result, aliases, byLink] = await Promise.all([
+        Promise.resolve().then(() => Sheet.load(source, { fetch: win.fetch.bind(win), schoolCode: v.cfg.schoolCode, accessToken: auth ? auth.client.token() || '' : undefined })).catch(() => (
           { rows: [], tabs: [], issues: [], errors: [{ tab: null, message: "The check couldn't finish. Try again.", kind: 'network' }], sheetId: null })),
         readAliases(v.cfg.aliasesUrl),
+        auth ? readableByLink(source) : false,
       ]);
       state.checking = false;
       ui.checkButton.removeAttribute('aria-disabled');
+      if (auth) {
+        // A sign-in that has run out, or an account that can't view the sheet: the next check signs in again (choosing
+        // the account the second time).
+        const errs = Array.isArray(result.errors) ? result.errors : [];
+        if (errs.some(e => e.kind === 'auth' || e.kind === 'access')) auth.client.forget();
+        auth.chooseAccount = errs.some(e => e.kind === 'access');
+      }
       if (run !== state.checkRun) return;
-      const { problems, warnings } = renderCheck(result, source, v.cfg, aliases);
+      const { problems, warnings } = renderCheck(result, source, v.cfg, aliases, byLink);
       const now = buildConfigJs(validate(readForm()).cfg);
       if (now !== text) {
         setText(ui.checkStatus, 'The settings changed during the check. Check the list again before saving.');
@@ -1204,11 +1314,14 @@
 
     // Shows what the check read, tab by tab. Returns the problems that block saving and the warnings that don't
     // (plain sentences).
-    function renderCheck(result, source, cfg, aliases) {
+    function renderCheck(result, source, cfg, aliases, byLink) {
       const out = ui.checkResults;
       const problems = [], warnings = [];
       const errors = Array.isArray(result.errors) ? result.errors : [];
-      for (const e of errors) problems.push(sentence((e.tab ? e.tab + ': ' : '') + str(e.message)));
+      for (const e of errors) {
+        problems.push(sentence((e.tab ? e.tab + ': ' : '') + str(e.message)) +
+          (e.kind === 'access' ? ' Check the list again to sign in with an account that can view it.' : e.kind === 'auth' ? ' Check the list again to sign in.' : ''));
+      }
       const tabs = Array.isArray(result.tabs) ? result.tabs : [];
       if (!tabs.length && !errors.length) problems.push('No tab with a list was found.');
       if (source.kind === 'script' && result.sheetId && source.sheetId && result.sheetId !== source.sheetId) {
@@ -1216,7 +1329,19 @@
       }
       out.append(el('p', { class: 'check-source' }, source.kind === 'script'
         ? 'Read through the Apps Script web app' + (result.sheetId ? ', from spreadsheet ' + shortId(result.sheetId) : '') + '.'
-        : 'Read by link from spreadsheet ' + shortId(source.sheetId) + '.'));
+        : source.kind === 'api'
+          ? 'Read with your Google sign-in from spreadsheet ' + shortId(source.sheetId) + ', as each visitor will read it with theirs.'
+          : 'Read by link from spreadsheet ' + shortId(source.sheetId) + '.'));
+      if (byLink) {
+        warnings.push('This sheet is also shared "Anyone with the link can view", so anyone with its link can read it without signing in. ' +
+          'For sign-in to keep out people without access, turn off link sharing in the sheet (Share, General access).');
+      }
+      // The Apps Script reader answers anyone who has its address, whatever these settings say, until it is archived.
+      const oldScript = state.base && Sheet.parseScriptUrl(str(state.base.scriptUrl));
+      if (oldScript && !cfg.scriptUrl) {
+        warnings.push('The current settings read through an Apps Script reader, which keeps answering anyone who has its address after this change. ' +
+          "Once the new settings work, archive its deployment (in the script: Deploy, Manage deployments, Archive). See apps-script/README.md.");
+      }
       // The school's code, as the search page matches it: rows with it show "Banned by <code>".
       const code = str(cfg.schoolCode);
       const ours = result.rows.filter(r => r && r.status && r.status.level === 'uas').length;
@@ -1400,7 +1525,7 @@
       ui.token.addEventListener('input', () => { if (!ui.tokenError.hidden) tokenProblem(''); });
     }
 
-    if (!Sheet) {
+    if (!Sheet || !SignIn) {
       setText(ui.pageStatus, "The page's scripts didn't load, so the settings can't be changed here. Reload the page to try again.");
       return;
     }

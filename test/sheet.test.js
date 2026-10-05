@@ -645,6 +645,130 @@ const LIVE = [['Sheet1', 'live-sheet1.csv', '0'], ['Other Materials', 'live-othe
 const haveLive = LIVE.every(([, f]) => fs.existsSync(path.join(DATA, f)));
 const parityReady = haveLive && hasSample();
 
+// ------------------------------------------------------------------------------------------------
+// Signed in: the Google Sheets API with the visitor's own token
+
+const G = require('./helpers/google.js');
+const API_TABS = [
+  {
+    title: 'Main List', gid: '0',
+    rows: [
+      ['Synthetic Banned List 2004-2026', '', '', '', '', '', '', 'Notes beside the list'],
+      ['updated as of 1 January 2026'],
+      ['Title', 'Author', 'ISBN', 'Banned By', 'Type', 'Year of Banning', 'Memo', 'Status'],
+      ['Alpha Jokes', 'Pat Writer', '', 'RS', 'Book', '2010-2011', { text: 'Memo 4', link: 'https://drive.google.com/file/d/memo4/view' }, 'Active'],
+      ['Beta Stories', 'Sam Press', { text: '9.79889E+12', number: 9798891234567 }, 'KES', 'Book', '2006-2007', { text: 'see memo', runLink: 'https://example.com/m5' }],
+      [{ text: 'Gamma Science', formula: '=HYPERLINK("https://example.com/g", "Gamma Science")' }, 'Lee Author', '', 'Ministry', 'Book', '2009-2010', { text: 'bad', link: 'javascript:alert(1)' }],
+      ['Delta Unit 1', 'Kim Doe', '', 'UAS', 'Kit', '2020-2021'],
+      ['Delta Unit 2', '', '', '', 'Kit', '2020-2021'],
+      [],
+      ["Zeta's Tale", 'Ann Other', '978-0-00-000000-2', 'Ministry', 'Book', '2023-2024'],
+    ],
+    hiddenRows: [5],
+    merges: [[7, 2, 1], [7, 2, 3], [1, 2, 0]],   // Author and Banned By merged down over rows 7–8; a banner merge above the header
+  },
+  { title: "Teacher's Other", gid: '1111920478', rows: [['Title', 'Author'], ['Other Thing', 'Some Author']] },
+  { title: 'Archive', gid: '42', hidden: true, rows: [['Title'], ['Old Thing']] },
+];
+
+test('load (signed in): reads the tabs through the Sheets API with the token, as the other paths read them', async () => {
+  const api = G.sheetsApi(SID, API_TABS);
+  const fetch = async (url, init) => api(url, init);
+  const res = await S.load({ kind: 'api', sheetId: SID, tabs: [{ gid: '0', name: 'Sheet1' }, { gid: '1111920478', name: null }] },
+    { fetch, accessToken: G.TOKEN, now: NOW });
+  assert.equal(res.source, 'api');
+  assert.deepEqual(res.errors, []);
+  assert.equal(res.sheetId, SID);
+  assert.deepEqual(res.tabs.map(t => [t.tab, t.gid, t.sheetTabName, t.headerRow, t.hiddenKnown]),
+    [['Sheet1', '0', 'Main List', 3, true], ["Teacher's Other", '1111920478', "Teacher's Other", 1, true]]);
+  assert.equal(res.tabs[0].updatedAsOf, 'updated as of 1 January 2026');
+  assert.equal(res.tabs[0].bannerTitle, 'Synthetic Banned List 2004-2026');
+  assert.equal(res.tabs[0].lastCol, 'H', 'the Status header is part of the table');
+
+  // Two calls: the tabs' titles, then their cells by title. The token is only ever in the Authorization header.
+  assert.equal(api.calls.length, 2);
+  for (const c of api.calls) {
+    assert.equal(c.init.headers.Authorization, 'Bearer ' + G.TOKEN);
+    assert.ok(!c.url.includes(G.TOKEN), 'no token in the address');
+    assert.equal(c.init.credentials, 'omit');
+    assert.equal(c.init.cache, 'no-store');
+  }
+  const grid = new URL(api.calls[1].url);
+  assert.deepEqual(grid.searchParams.getAll('ranges'), ["'Main List'", "'Teacher''s Other'"]);
+  assert.match(grid.searchParams.get('fields'), /hiddenByFilter/);
+
+  const by = Object.fromEntries(res.rows.map(r => [r.title, r]));
+  assert.deepEqual(res.rows.map(r => [r.tab, r.row]), [['Sheet1', 4], ['Sheet1', 5], ['Sheet1', 6], ['Sheet1', 7], ['Sheet1', 8], ['Sheet1', 10], ["Teacher's Other", 2]]);
+  assert.equal(by['Alpha Jokes'].memoUrl, 'https://drive.google.com/file/d/memo4/view');
+  assert.deepEqual(by['Alpha Jokes'].extra, [{ header: 'Status', value: 'Active' }]);
+  assert.equal(by['Alpha Jokes'].hidden, false);
+  assert.equal(by['Beta Stories'].hidden, true, 'row 5 is hidden');
+  assert.equal(by['Beta Stories'].isbn, '9.79889E+12');
+  assert.equal(by['Beta Stories'].isbnRaw, '9798891234567', 'all 13 digits from the value behind the display');
+  assert.equal(by['Beta Stories'].memoUrl, 'https://example.com/m5', 'a link on part of the text');
+  assert.equal(by['Gamma Science'].titleUrl, 'https://example.com/g', 'from =HYPERLINK');
+  assert.equal(by['Gamma Science'].memoUrl, null, 'only https links');
+  assert.equal(by['Delta Unit 2'].author, 'Kim Doe', 'a merged cell is copied down');
+  assert.equal(by['Delta Unit 2'].status.level, 'uas');
+  assert.equal(by["Zeta's Tale"].isbnRaw, '9780000000002');
+  assert.equal(res.issues.filter(i => i.kind === 'isbnScientific').length, 1);
+  assert.equal(by['Other Thing'].tab, "Teacher's Other", 'no configured name: the sheet names the tab');
+});
+
+test('load (signed in): no tab id reads the first tab that is not hidden; an unknown tab id is a tab error', async () => {
+  const tabs = [Object.assign({}, API_TABS[2], { gid: '0' }), API_TABS[1]];   // the first tab is hidden
+  const api = G.sheetsApi(SID, tabs);
+  let res = await S.load({ kind: 'api', sheetId: SID, tabs: [{ gid: null, name: null }] }, { fetch: async (u, i) => api(u, i), accessToken: G.TOKEN });
+  assert.deepEqual(res.tabs.map(t => [t.tab, t.gid]), [["Teacher's Other", '1111920478']]);
+  res = await S.load({ kind: 'api', sheetId: SID, tabs: [{ gid: '1111920478', name: 'Other' }, { gid: '999', name: 'Ghost' }] }, { fetch: async (u, i) => api(u, i), accessToken: G.TOKEN });
+  assert.deepEqual(res.tabs.map(t => t.tab), ['Other']);
+  assert.deepEqual(res.errors, [{ tab: 'Ghost', message: S.messages.apiNoTab, kind: 'format' }]);
+});
+
+test('load (signed in): no sign-in, a sign-in that ran out, no access, the API off, and other failures each say what to do', async () => {
+  const fetchFrom = handler => async (u, i) => handler(u, i);
+  const src = { kind: 'api', sheetId: SID, tabs: [{ gid: '0', name: 'Sheet1' }] };
+  const one = async (opts) => {
+    const res = await S.load(src, opts);
+    assert.equal(res.rows.length, 0);
+    assert.equal(res.errors.length, 1);
+    return res.errors[0];
+  };
+  let calls = 0;
+  assert.deepEqual(await one({ fetch: async () => { calls++; }, accessToken: '' }), { tab: null, message: S.messages.apiSignIn, kind: 'auth' });
+  assert.equal(calls, 0, 'nothing is fetched without a token');
+  assert.deepEqual(await one({ fetch: fetchFrom(G.sheetsApi(SID, API_TABS)), accessToken: 'ya29.expired' }),
+    { tab: null, message: S.messages.apiAccess, kind: 'access' }, 'the account can view nothing');
+  const answering = r => fetchFrom(G.sheetsApi(SID, API_TABS, { answer: () => r() }));
+  assert.equal((await one({ fetch: answering(() => G.apiError(401, 'UNAUTHENTICATED', 'Request had invalid authentication credentials.')), accessToken: G.TOKEN })).kind, 'auth');
+  const scope = await one({ fetch: answering(() => G.apiError(403, 'PERMISSION_DENIED', 'Request had insufficient authentication scopes.', [{ reason: 'ACCESS_TOKEN_SCOPE_INSUFFICIENT' }])), accessToken: G.TOKEN });
+  assert.deepEqual([scope.kind, scope.message], ['auth', S.messages.apiScope]);
+  const off = await one({ fetch: answering(() => G.apiError(403, 'PERMISSION_DENIED', 'Google Sheets API has not been used in project 123 before or it is disabled.', [{ reason: 'SERVICE_DISABLED' }])), accessToken: G.TOKEN });
+  assert.deepEqual([off.kind, off.message], ['setup', S.messages.apiDisabled]);
+  assert.ok(!off.message.includes('123'), "Google's own words (and project number) aren't shown");
+  assert.deepEqual(await one({ fetch: fetchFrom(G.sheetsApi('1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210_-wxyz', API_TABS)), accessToken: G.TOKEN }),
+    { tab: null, message: S.messages.apiNotFound, kind: 'http' });
+  assert.match((await one({ fetch: answering(() => G.apiError(429, 'RESOURCE_EXHAUSTED', 'Quota exceeded')), accessToken: G.TOKEN })).message, /too many requests/);
+  assert.match((await one({ fetch: answering(() => G.apiError(503, 'UNAVAILABLE', 'x')), accessToken: G.TOKEN })).message, /try again in a moment/);
+  assert.deepEqual(await one({ fetch: async () => { throw new TypeError('Failed to fetch'); }, accessToken: G.TOKEN }),
+    { tab: null, message: S.messages.apiNetwork, kind: 'network' });
+  assert.equal((await one({ fetch: answering(() => new Response('<html>', { status: 200, headers: { 'content-type': 'text/html' } })), accessToken: G.TOKEN })).kind, 'format');
+  // The grid call failing after the tabs call still names the problem.
+  const second = await one({ fetch: fetchFrom(G.sheetsApi(SID, API_TABS, { answer: (u, n) => (n === 2 ? G.apiError(403, 'PERMISSION_DENIED', 'The caller does not have permission') : null) })), accessToken: G.TOKEN });
+  assert.equal(second.kind, 'access');
+});
+
+test('tableFromGrid: merges above the header are left alone; rows without metadata are "can\'t tell"', () => {
+  const sheet = G.gridSheet({ title: 'T', gid: '0', rows: [['Banner'], [], ['Title', 'Author'], ['A', 'B'], ['C', '']], merges: [[1, 3, 0], [4, 2, 1]] });
+  const t = S.tableFromGrid(sheet, { tab: 'T', gid: '0', sheetId: SID });
+  assert.deepEqual(t.records.map(r => r.cells), [['Banner'], [], ['Title', 'Author'], ['A', 'B'], ['C', 'B']]);
+  delete sheet.data[0].rowMetadata;
+  const t2 = S.tableFromGrid(sheet, { tab: 'T', gid: '0', sheetId: SID });
+  assert.equal(t2.hiddenKnown, false);
+  assert.ok(t2.records.every(r => r.hidden === null));
+  assert.deepEqual(S.tableFromGrid(null, { tab: 'T' }).records, []);
+});
+
 test('parity: live CSV exports match the xlsx sample rows', { skip: parityReady ? false : 'sample .xlsx or test/data/live-*.csv absent' }, t => {
   const sample = loadSampleRows();
   const strict = ['tab', 'row', 'title', 'author', 'isbn', 'bannedBy', 'type', 'memo'];

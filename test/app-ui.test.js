@@ -10,7 +10,8 @@ const vm = require('vm');
 
 const ROOT = path.join(__dirname, '..');
 const read = f => fs.readFileSync(path.join(ROOT, f), 'utf8');
-const SOURCES = { sheet: read('src/sheet.js'), engine: read('src/engine.js'), app: read('src/app.js') };
+const SOURCES = { sheet: read('src/sheet.js'), signin: read('src/signin.js'), engine: read('src/engine.js'), app: read('src/app.js') };
+const G = require('./helpers/google.js');
 const SID = '1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abcd';
 const SID2 = '1ZyXwVuTsRqPoNmLkJiHgFeDcBa9876543210_-wxyz';
 const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbx_Example-Deployment_0123456789abcdef/exec';
@@ -191,9 +192,11 @@ function makePage(opts = {}) {
     return w;
   });
   win.window = win; win.self = win; win.globalThis = win;
+  if (opts.google) win.google = opts.google;
   win.fetch = (url, init) => opts.fetch(String(url), init);
   const ctx = vm.createContext(win);
   vm.runInContext(SOURCES.sheet, ctx, { filename: 'src/sheet.js' });
+  vm.runInContext(SOURCES.signin, ctx, { filename: 'src/signin.js' });
   vm.runInContext(SOURCES.engine, ctx, { filename: 'src/engine.js' });
 
   const $ = id => byId[id];
@@ -891,4 +894,159 @@ test('a partial-load warning quoting a script message ends with one full stop (B
   const q = await loaded({ config: { tabs: [{ gid: '0', name: 'Sheet1' }, { gid: '123', name: 'Other Materials' }] },
     fetch: stubFetch(url => (/gid=123/.test(url) ? new Response('oops', { status: 500 }) : sheetCsv())) });
   assert.equal(q.text('status-warning'), "Loaded Sheet1; couldn't load Other Materials: Google answered with an error (HTTP 500): try again in a moment.");
+});
+
+// ------------------------------------------------------------------------------------------------
+// Signed in (config.googleClientId): each visitor reads the sheet with their own Google account
+
+const SIGNED_IN = { googleClientId: G.CLIENT_ID };
+const API_ROWS = HEAD.concat(BASE_ROWS).map(line => line.split(','));
+
+// Answers aliases.json and the Sheets API (G.sheetsApi); anything else fails, so no other read can sneak in.
+function apiFetch(opts = {}) {
+  const api = G.sheetsApi(SID, [{ title: 'Sheet1', gid: '0', rows: opts.rows || API_ROWS }], opts);
+  const calls = [];
+  const fetch = async (url, init) => {
+    calls.push({ url, init });
+    if (/aliases\.json/.test(url)) return aliasesResponse();
+    const r = api(url, init);
+    if (r) return r;
+    throw new TypeError('unexpected fetch ' + url);
+  };
+  fetch.calls = calls;
+  return { fetch, api };
+}
+
+async function signedIn(opts = {}) {
+  const gis = opts.gis || G.fakeGis();
+  const { fetch, api } = apiFetch(opts);
+  const p = makePage({ config: Object.assign({}, SIGNED_IN, opts.config), google: gis, fetch });
+  p.start();
+  await p.flush();
+  Object.assign(p, { gis, api, fetchCalls: fetch.calls, button: () => p.$('status-actions').querySelector('button') });
+  return p;
+}
+
+test('signed in: nothing is read until the visitor signs in, then the list is read with their own token (SIGNIN-1)', async () => {
+  const p = await signedIn();
+  assert.equal(p.text('status'), 'Sign in with Google to search the list. Only people who can view the sheet can search it.');
+  assert.equal(p.$('status').getAttribute('data-phase'), 'signin');
+  assert.equal(p.button().textContent, 'Sign in with Google');
+  assert.equal(p.api.calls.length, 0, 'nothing read before signing in');
+  assert.equal(p.text('source'), 'Reading Sheet1 of this Google Sheet with your Google sign-in.');
+  await p.type('zebra');
+  assert.match(p.text('results'), /Sign in to search: your search will run as soon as the list arrives\./);
+
+  p.click(p.button());
+  await p.flush();
+  assert.deepEqual(p.gis.requests, [{ clientId: G.CLIENT_ID, scope: G.SCOPE, prompt: '' }]);
+  assert.equal(p.api.calls.length, 2);
+  assert.ok(p.api.calls.every(c => c.init.headers.Authorization === 'Bearer ' + G.TOKEN && !c.url.includes(G.TOKEN)));
+  assert.ok(p.fetchCalls.every(c => !/docs\.google\.com|script\.google\.com/.test(c.url)), 'never read by link or script');
+  assert.match(p.text('status'), /^6 items · updated as of 1 January 2026 \(from the sheet\) · fetched \d\d:\d\d$/);
+  assert.equal(p.text('summary'), '1 listing found', 'the search typed before signing in runs');
+  assert.equal(p.cards()[0].querySelector('a.row-link').href, 'https://docs.google.com/spreadsheets/d/' + SID + '/edit?gid=0#gid=0&range=A6:G6');
+  assert.equal(p.$('status-actions').hidden, true);
+  assert.ok(!p.text('results').includes(G.TOKEN) && !p.text('status').includes(G.TOKEN));
+});
+
+test("signed in: an account that can't view the sheet is told so, and can sign in with another one (SIGNIN-2)", async () => {
+  let allowed = false;
+  const p = await signedIn({ canView: () => allowed });
+  p.click(p.button());
+  await p.flush();
+  assert.equal(p.$('status').getAttribute('data-phase'), 'failed');
+  assert.equal(p.text('status'), "Can't load the list. The Google account you signed in with can't view this sheet. Sign in with an account that can view it, or ask the sheet's owner for access.");
+  const b = p.button();
+  assert.equal(b.textContent, 'Sign in with another account');
+  assert.deepEqual(p.$('status-actions').querySelectorAll('a').map(a => a.textContent), ['Open the sheet']);
+  allowed = true;
+  p.click(b);
+  await p.flush();
+  assert.deepEqual(p.gis.requests.map(r => r.prompt), ['', 'select_account']);
+  assert.match(p.text('status'), /^6 items/);
+});
+
+test('signed in: a sign-in that runs out keeps the list on screen and asks to sign in again (SIGNIN-3)', async () => {
+  const p = await signedIn();
+  p.click(p.button());
+  await p.flush();
+  const reads = () => p.api.calls.length / 2;
+  assert.equal(reads(), 1);
+  await p.advance(30 * MINUTE);
+  assert.ok(reads() >= 6, 'refreshed every 5 minutes while signed in');
+  // The sign-in lasts an hour: the first refresh due after it runs out finds it gone.
+  await p.advance(40 * MINUTE);
+  const before = reads();
+  assert.equal(p.text('status-warning'), "Your Google sign-in has run out, so the list isn't being refreshed; showing data fetched at " + p.text('status').match(/fetched (\d\d:\d\d)$/)[1] + '.');
+  assert.equal(p.button().textContent, 'Sign in again');
+  await p.advance(10 * MINUTE);
+  assert.equal(reads(), before, 'no reads without a sign-in');
+  await p.type('orchard');
+  assert.equal(p.text('summary'), '1 listing found', 'the list on screen still searches');
+  // A row link opens the row as loaded: checking it again would need a sign-in.
+  const ev = p.click(p.cards()[0].querySelector('a.row-link'));
+  assert.equal(ev.defaultPrevented, undefined);
+  assert.equal(p.opened.length, 0);
+
+  p.click(p.button());
+  await p.flush();
+  assert.equal(reads(), before + 1);
+  assert.equal(p.text('status-warning'), '');
+  assert.equal(p.$('status-actions').hidden, true);
+});
+
+test("signed in: Google's script blocked, a closed sign-in window, and a bad client ID (SIGNIN-4)", async () => {
+  const { fetch } = apiFetch();
+  const p = makePage({ config: SIGNED_IN, fetch });
+  p.start();
+  await p.flush();
+  assert.equal(p.text('status'), 'Loading Google sign-in…');
+  assert.equal(p.$('status-actions').hidden, true);
+  await p.advance(20000);
+  assert.equal(p.text('status'), "Google sign-in didn't load: a network filter or browser extension may block accounts.google.com.");
+  assert.equal(p.$('status-actions').querySelector('button').textContent, 'Try again');
+  p.win.google = G.fakeGis([{ popup: 'popup_closed' }, { access_token: G.TOKEN, expires_in: 3599, scope: G.SCOPE }]);
+  p.click(p.$('status-actions').querySelector('button'));
+  await p.flush();
+  assert.equal(p.$('status-actions').querySelector('button').textContent, 'Sign in with Google');
+  p.click(p.$('status-actions').querySelector('button'));
+  await p.flush();
+  assert.equal(p.text('status'), 'The sign-in window closed before signing in finished.');
+  assert.equal(p.$('status-actions').querySelector('button').textContent, 'Sign in again');
+  p.click(p.$('status-actions').querySelector('button'));
+  await p.flush();
+  assert.match(p.text('status'), /^6 items/);
+
+  const q = makePage({ config: { googleClientId: G.FAKE_SECRET }, fetch, google: G.fakeGis() });
+  q.start();
+  await q.flush();
+  assert.equal(q.$('status').getAttribute('data-phase'), 'config');
+  assert.match(q.text('status'), /^The googleClientId in config\.js is not a Google sign-in client ID/);
+});
+
+test('signed in: ?sheet= links still read by link, without signing in (SIGNIN-5)', async () => {
+  const gis = G.fakeGis();
+  const p = makePage({ href: sheetHref(SID2, '/edit#gid=0'), config: SIGNED_IN, google: gis, fetch: stubFetch(() => sheetCsv()) });
+  p.start();
+  await p.flush();
+  assert.match(p.text('status'), /^6 items/);
+  assert.equal(gis.requests.length, 0);
+});
+
+test('index.html allows Google sign-in and the Sheets API in its CSP; the token is never stored or logged (SIGNIN-10)', () => {
+  const html = read('index.html');
+  assert.ok(html.includes('<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; ' +
+    "script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' https://accounts.google.com/gsi/style; img-src 'self' data:; " +
+    "connect-src 'self' https://docs.google.com https://*.googleusercontent.com https://script.google.com https://sheets.googleapis.com " +
+    "https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'\">"), 'CSP');
+  // Google's sign-in checks where its window was opened from; only the site's address is sent, never a page's path.
+  assert.match(html, /<meta name="referrer" content="strict-origin">/);
+  assert.deepEqual([...html.matchAll(/<script ([^>]*)><\/script>/g)].map(m => m[1]),
+    ['defer src="config.js"', 'defer src="src/sheet.js"', 'defer src="src/signin.js"', 'defer src="src/engine.js"', 'defer src="src/app.js"']);
+  const signin = read('src/signin.js');
+  for (const src of [signin, read('src/app.js'), read('src/sheet.js')]) {
+    for (const bad of ['localStorage', 'sessionStorage', 'indexedDB', 'document.cookie', 'innerHTML']) assert.ok(!src.includes(bad), bad);
+  }
+  assert.ok(!/console\./.test(signin), 'signin.js logs nothing');
 });

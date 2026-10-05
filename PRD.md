@@ -17,7 +17,7 @@ CensorSearch is one static web page that searches the government's banned-materi
 
 ## Users and use cases
 
-Teachers and librarians use it to check whether a book, DVD or other material is on the list before using it. Nobody signs in.
+Teachers and librarians use it to check whether a book, DVD or other material is on the list before using it. Nobody signs in, except where the list is limited to people who can view the sheet (the school's list, from 5 October 2026): there each teacher signs in with their Google account.
 
 1. **Check a title.** Type all or part of it, with or without "The"/"A", in any word order. See every matching row.
 2. **Check an author.** Type a first name, a last name or both. See everything listed under that author.
@@ -37,14 +37,17 @@ The Google Sheet is the only data source. The page reads it read-only on every l
 - **Any sheet URL (nice to have).** Someone can open the page with a different Google Sheets link, e.g. `…/?sheet=<link>`, and it works if that sheet has a header row with at least Title and Author. Mapping columns by header name makes this nearly free on our side. It must also work for sheets we can only view (not own), so the access method below cannot depend on changing a sheet's sharing or attaching a script to it.
 - **Loading and failure states.** While loading: "Loading the list…". Once loaded: "N items · updated as of 28 September 2026 (from the sheet) · fetched 14:05". If the fetch fails, say so plainly and link to the sheet. Never show an empty result list that could be read as "not listed".
 
-**Decision: two read paths, same app.**
+**Decision: three read paths, same app.**
 
 1. **Default: read the sheet directly by link.** Any sheet shared as "Anyone with the link can view" (or published to the web) is downloaded as CSV straight into the page. No script is needed, and the sheet can be one we only view.
-2. **Fallback: a read-only Apps Script web app** for sheets that can't be link-shared. A small Google-hosted script, running under an account that can view the sheet, returns the rows to the page and stores nothing. **The school's own sheet uses this path.**
+2. **Fallback: a read-only Apps Script web app** for sheets that can't be link-shared. A small Google-hosted script, running under an account that can view the sheet, returns the rows to the page and stores nothing. The school's own sheet used this path until 5 October 2026.
+3. **Signed in (5 October 2026): the Google Sheets API with each visitor's own Google sign-in**, so only people who can view the sheet can search it. **The school's own sheet uses this path.**
 
-Both paths feed the same header mapping, index and search, so the rest of this PRD doesn't depend on which one a sheet uses.
+All three paths feed the same header mapping, index and search, so the rest of this PRD doesn't depend on which one a sheet uses.
 
-**Who can use the Apps Script path (v1): anyone with the page's link, with no sign-in.** The script runs as its owner and returns only the mapped columns (Title, Author, ISBN, Banned By, Type, Year of Banning, Memo), never the rest of the sheet. People without access to the sheet can search it this way, but its row links open only for people who have access. That's acceptable for v1. Restricting the app to school accounts can come later.
+**Who can use the Apps Script path (v1): anyone with the page's link, with no sign-in.** The script runs as its owner and returns only the mapped columns (Title, Author, ISBN, Banned By, Type, Year of Banning, Memo), never the rest of the sheet. People without access to the sheet can search it this way, but its row links open only for people who have access. That was acceptable for v1.
+
+**Who can search the school's list (5 October 2026): only people who can view the sheet.** The page signs each visitor in with Google Identity Services (a token that can only read Google Sheets, kept in the tab's memory) and reads the sheet through the Sheets API with it, so Google itself refuses anyone the sheet isn't shared with. A page can't find this out without sign-in: browsers hide from a page whether its visitor can open another site's file. The sign-in is registered in a Google Cloud project in the school's Workspace, set to Internal: only school accounts can sign in, and Google doesn't review the app. Its client ID is public (config.js); the page has no secret. The Apps Script deployment is archived once sign-in works, since it answers anyone with its address.
 
 ### How the page reads the sheet
 
@@ -58,9 +61,11 @@ Each method below was tested live against public Google sheets on 29 September 2
 | Google Visualization query (`gviz/tq`) | Link sharing | Yes | None; hidden rows silently dropped | No | Rejected |
 | Publish to web | The owner publishes, making the list public at a new URL | Lags by minutes | Exact | Only for whole-document publishing | Rejected: owner action, and it publishes the list |
 | Sheets API with a key | Link sharing plus a Google Cloud project and key | Yes | Exact | Yes | Rejected: same sharing need as CSV, more setup |
+| Sheets API with the visitor's sign-in | A Google Cloud project with a web client ID; each visitor signs in and must be able to view the sheet | Yes | Exact, plus hidden-row flags and tab ids | Yes | **Signed-in path; the school's sheet** |
 
 - **Default path.** One fetch per page load of the tab named by the link's `gid` (the first tab if the link has none). Verified: Google allows the cross-site request, sends no-cache headers, includes hidden and filtered rows, and exports 13-digit ISBNs in full. A real CSV parser (header off, empty lines kept) makes row = record number.
 - **Fallback path.** A standalone Apps Script, not attached to the sheet, owned by a long-lived school role account rather than a teacher who might leave. That account gets **Viewer** access to the sheet, which keeps the script read-only even though Google's open-by-id permission is broad. It returns display values, raw values (exact ISBNs), memo link URLs, fill colours, hidden flags and tab ids, for the mapped columns only. Verified: a plain GET to an "Anyone" web app works cross-site.
+- **Signed-in path.** Two reads per load: the tabs' current titles, then those tabs' cells (display values, the number behind each, links, merges and hidden-row flags) in one call, mapped exactly as the Apps Script maps them. The token goes only in the request's Authorization header; it is never stored, shown or put in an address. It lasts about an hour: after that the list on screen stays searchable and the page asks to sign in again before reading the sheet again. Anyone the sheet isn't shared with is told so and can sign in with another account.
 - **No Google-side cache by default**, to honour "no stored data". Apps Script allows 30 simultaneous runs; a cache of 5 minutes or less is the lever if load ever becomes a problem.
 - **Risk.** A Workspace admin can disable Apps Script, or "Anyone" deployments (the second is community-reported, not documented). Then the fallback needs school sign-in and the page is served by Apps Script itself, the "later" option.
 - **Hosting.** The page must be served over https; GitHub Pages works. Opened from disk (`file://`), Google refuses the request.
@@ -310,7 +315,7 @@ No library handles moved articles, number words or split compounds, so the norma
 The app is a lens on the sheet, never a copy of it or an authority over it.
 
 - **No backend of our own.** No server, database or cache. The page fetches the sheet on load, builds an index in memory and discards it when the tab closes. Nothing goes in localStorage or sessionStorage, and the Apps Script fallback keeps no Google-side cache by default.
-- **No accounts, analytics, query logging or search history.** The query never goes into the page URL.
+- **No accounts of our own, analytics, query logging or search history.** The signed-in path uses the visitor's Google account and keeps its token only in the open tab. The query never goes into the page URL.
 - **Read-only.** The app never writes to the sheet, and the Apps Script account has Viewer access only.
 - **Not a verdict.** The sheet stays the source of truth. The app never labels an item "safe" or "approved"; a search with no results says so plainly and points to the sheet.
 - **No editing, flagging or reporting workflow.**
@@ -332,7 +337,8 @@ The first question decides the access method; the rest tune search rules and wor
 
 - [x] **Who owns the Google Sheet?** The school owns and updates it. Other sheets opened by link may be view-only.
 - [x] **Can the school's sheet be link-shared?** No, so it uses the Apps Script fallback; link-shared sheets use the direct path.
-- [x] **Who may use the Apps Script page?** Anyone with its link for now. Restricting it to school accounts may come later.
+- [x] **Who may use the Apps Script page?** Anyone with its link, until 5 October 2026.
+- [x] **Who may search the school's list?** Only people who can view the sheet (decided 5 October 2026), through the signed-in path. The project owner created the Internal Cloud project in the school's Workspace without IT and verified a sign-in that read the sheet.
 - [x] **Does the school's Workspace admin allow Apps Script web apps open to "Anyone"?** Unknown; assumed yes for now. If it turns out to be blocked, v1 needs school sign-in.
 - [x] **Which account owns the Apps Script?** The project owner's teacher account for now, possibly swapped for a long-lived role account later. That account needs Viewer access to the sheet, and the web app stops working if the account is removed, so the swap should happen before any staff change.
 - [x] **How many rows?** About 1,200 today, in the low thousands. No special handling needed.

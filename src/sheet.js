@@ -1,6 +1,7 @@
-// CensorSheet: reads a banned-materials Google Sheet (CSV export by link, or the read-only Apps Script
-// fallback) and turns it into Row objects for the search engine. See PRD.md "Data source and architecture"
-// and "Sheet structure and data access". No dependencies; works in the browser (window.CensorSheet) and Node.
+// CensorSheet: reads a banned-materials Google Sheet (CSV export by link, the read-only Apps Script fallback, or the
+// Google Sheets API with the visitor's own sign-in) and turns it into Row objects for the search engine. See PRD.md
+// "Data source and architecture" and "Sheet structure and data access". No dependencies; works in the browser
+// (window.CensorSheet) and Node.
 //
 // Every cell value stays the string the sheet displays. Nothing here renders HTML: callers must show cell
 // text with textContent. Only https links ever reach memoUrl/titleUrl.
@@ -24,6 +25,15 @@
     badSheetId: "This isn't a Google Sheets link.",
     noHeader: "No Title column in the first 10 rows of this tab, so it can't be searched.",
     timeout: 'Reading the sheet took too long: the connection may be slow, or a network filter may block Google',
+    apiNetwork: "Can't reach Google's Sheets service: a network filter may block it",
+    apiJson: "Google's answer couldn't be read as the list.",
+    apiSignIn: 'Sign in with Google to read the list.',
+    apiExpired: 'Your Google sign-in has run out. Sign in again.',
+    apiScope: "Your Google sign-in didn't give this page permission to see the sheet. Sign in again and allow it.",
+    apiAccess: "The Google account you signed in with can't view this sheet.",
+    apiDisabled: "The Google Sheets API is turned off in this page's Google Cloud project, so the list can't be read. A list maintainer needs to turn it on.",
+    apiNotFound: 'Google answered with an error (HTTP 404): no spreadsheet has this id. Check the sheet link.',
+    apiNoTab: 'No tab with this id in the spreadsheet.',
   };
 
   const DEFAULT_TIMEOUT_MS = 30000;
@@ -477,6 +487,80 @@
   }
 
   // ---------------------------------------------------------------------------------------------
+  // Google Sheets API grid data -> Tables
+
+  // Exact ISBN digits (and a final X), as the Apps Script's isbnRawText_: a whole number as written out, or text without
+  // spaces, hyphens and an "ISBN" label. Only one whole ISBN (9, 10 or 13 characters) counts.
+  function isbnDigits(number, text) {
+    let s = '';
+    if (typeof number === 'number') s = Number.isInteger(number) && number >= 0 && number < 1e21 ? number.toFixed(0) : '';
+    else s = str(text).replace(/[\s ‐-―-]+/g, '').toUpperCase().replace(/^ISBN(?:1[03])?:?/, '');
+    return /^(?:\d{9}|\d{9}[\dX]|\d{13})$/.test(s) ? s : '';
+  }
+
+  // A link on the whole cell (or from =HYPERLINK), else the first https link on part of its text.
+  function cellLink(v) {
+    if (!v || typeof v !== 'object') return null;
+    const whole = safeHttpsUrl(v.hyperlink);
+    if (whole) return whole;
+    for (const run of Array.isArray(v.textFormatRuns) ? v.textFormatRuns : []) {
+      const u = run && run.format && run.format.link ? safeHttpsUrl(run.format.link.uri) : null;
+      if (u) return u;
+    }
+    const f = v.userEnteredValue && typeof v.userEnteredValue.formulaValue === 'string' ? v.userEnteredValue.formulaValue : '';
+    const m = /HYPERLINK\s*\(\s*"((?:[^"]|"")*)"/i.exec(f);
+    return m ? safeHttpsUrl(m[1].replace(/""/g, '"')) : null;
+  }
+
+  // One sheet of a spreadsheets.get answer with grid data -> the table extractRows reads: every cell as displayed, its
+  // https link, exact ISBN digits, and the row's hidden flag (by a user or by the sheet's filter). As on the Apps Script
+  // path, a merged cell's value is copied down to every row the merge covers (in its first column), below the header.
+  function tableFromGrid(sheet, opts) {
+    const o = opts || {};
+    const data = sheet && Array.isArray(sheet.data) && sheet.data[0] && typeof sheet.data[0] === 'object' ? sheet.data[0] : {};
+    const row0 = Math.max(0, Math.floor(Number(data.startRow)) || 0), col0 = Math.max(0, Math.floor(Number(data.startColumn)) || 0);
+    const rowData = Array.isArray(data.rowData) ? data.rowData : [];
+    const meta = Array.isArray(data.rowMetadata) ? data.rowMetadata : null;
+    const records = rowData.map((rd, i) => {
+      const values = rd && Array.isArray(rd.values) ? rd.values : [];
+      const cells = new Array(col0).fill(''), links = {}, isbnRaw = {};
+      values.forEach((v, j) => {
+        const c = col0 + j;
+        const text = v && v.formattedValue != null ? str(v.formattedValue) : '';
+        cells[c] = text;
+        if (isBlank(text)) return;
+        const link = cellLink(v);
+        if (link) links[c] = link;
+        const raw = isbnDigits(v.effectiveValue ? v.effectiveValue.numberValue : undefined, text);
+        if (raw) isbnRaw[c] = raw;
+      });
+      const m = meta ? meta[i] : null;
+      const hidden = m && typeof m === 'object' ? m.hiddenByUser === true || m.hiddenByFilter === true : null;
+      return { row: row0 + i + 1, cells, hidden, links, isbnRaw };
+    });
+    const header = records.find(r => r.row <= HEADER_SCAN_ROWS && r.cells.some(isTitleHeader));
+    for (const mg of sheet && Array.isArray(sheet.merges) ? sheet.merges : []) {
+      if (!mg || typeof mg !== 'object') continue;
+      const top = Number(mg.startRowIndex) || 0, end = Number(mg.endRowIndex) || 0, col = Number(mg.startColumnIndex) || 0;
+      if (end - top < 2 || !header || top + 1 <= header.row) continue;
+      const from = records[top - row0];
+      if (!from) continue;
+      for (let r = top + 1; r < end; r++) {
+        const rec = records[r - row0];
+        if (!rec) continue;
+        rec.cells[col] = from.cells[col] == null ? '' : from.cells[col];
+        if (from.links[col]) rec.links[col] = from.links[col]; else delete rec.links[col];
+        if (from.isbnRaw[col]) rec.isbnRaw[col] = from.isbnRaw[col]; else delete rec.isbnRaw[col];
+      }
+    }
+    for (const r of records) for (let c = 0; c < r.cells.length; c++) if (r.cells[c] == null) r.cells[c] = '';
+    const props = sheet && sheet.properties ? sheet.properties : {};
+    const table = { tab: str(o.tab) || 'Sheet', gid: gidOr0(o.gid), sheetId: str(o.sheetId), records, hiddenKnown: !!meta };
+    if (typeof props.hidden === 'boolean') table.hiddenTab = props.hidden;
+    return table;
+  }
+
+  // ---------------------------------------------------------------------------------------------
   // Loading
 
   const FETCH_OPTS = { cache: 'no-store', credentials: 'omit', redirect: 'follow', referrerPolicy: 'no-referrer' };
@@ -638,6 +722,107 @@
     return { parts, errors, sheetId: conv.sheetId };
   }
 
+  // The Google Sheets API, read with the visitor's own access token: Google answers only if their account can view the
+  // sheet. The token goes only in the Authorization header, never in an address or a message.
+  const API_BASE = 'https://sheets.googleapis.com/v4/spreadsheets/';
+  const API_TABS_FIELDS = 'sheets.properties(sheetId,title,hidden)';
+  const API_GRID_FIELDS = 'sheets(properties(sheetId,title,hidden),merges,data(startRow,startColumn,' +
+    'rowMetadata(hiddenByUser,hiddenByFilter),rowData(values(formattedValue,hyperlink,effectiveValue(numberValue),' +
+    'userEnteredValue(formulaValue),textFormatRuns(format(link(uri)))))))';
+
+  // kind: 'auth' (sign in again), 'access' (this account can't view the sheet), 'setup' (the Cloud project), else 'http'.
+  function apiError(status, body) {
+    const e = body && body.error && typeof body.error === 'object' ? body.error : {};
+    let details = '';
+    try { details = JSON.stringify(e.details || []); } catch (x) { details = ''; }
+    const text = str(e.status) + ' ' + str(e.message) + ' ' + details;
+    if (status === 401) return sheetError('auth', MSG.apiExpired);
+    if (status === 403) {
+      if (/SERVICE_DISABLED|has not been used|is disabled/i.test(text)) return sheetError('setup', MSG.apiDisabled);
+      if (/SCOPE_INSUFFICIENT|insufficient\W*(?:authentication\W*)?scopes?/i.test(text)) return sheetError('auth', MSG.apiScope);
+      if (/RATE_LIMIT|RESOURCE_EXHAUSTED|quota/i.test(text)) return sheetError('http', httpMessage(429, 'sheet'));
+      return sheetError('access', MSG.apiAccess);
+    }
+    if (status === 404) return sheetError('http', MSG.apiNotFound);
+    return sheetError('http', httpMessage(status, 'sheet'));
+  }
+
+  async function fetchApi(fetchFn, url, token, timeoutMs) {
+    const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
+    let timer = null, timedOut = false;
+    if (ctrl && timeoutMs > 0) timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutMs);
+    try {
+      const init = Object.assign({}, FETCH_OPTS, { headers: { Authorization: 'Bearer ' + token } }, ctrl ? { signal: ctrl.signal } : {});
+      let res, body = null;
+      try {
+        res = await fetchFn(url, init);
+      } catch (e) {
+        throw sheetError('network', timedOut ? MSG.timeout : MSG.apiNetwork);
+      }
+      if (!res || typeof res.status !== 'number') throw sheetError('network', MSG.apiNetwork);
+      try { body = await res.json(); } catch (e) {
+        if (timedOut) throw sheetError('network', MSG.timeout);
+        body = null;
+      }
+      if (!res.ok) throw apiError(res.status, body);
+      if (!body || typeof body !== 'object' || Array.isArray(body)) throw sheetError('format', MSG.apiJson);
+      return body;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  const a1Sheet = title => "'" + str(title).replace(/'/g, "''") + "'";
+  // Google leaves a 0 out of its answers (the first tab's sheetId), so a missing id is 0.
+  const apiGid = p => str(p && p.sheetId != null ? p.sheetId : 0);
+
+  async function loadApi(source, fetchFn, schoolCode, timeoutMs, token) {
+    const sheetId = str(source.sheetId);
+    if (!SHEET_ID_RE.test(sheetId)) return { parts: [], errors: [{ tab: null, message: MSG.badSheetId, kind: 'format' }], sheetId };
+    if (!token) return { parts: [], errors: [{ tab: null, message: MSG.apiSignIn, kind: 'auth' }], sheetId };
+    const wanted = Array.isArray(source.tabs) && source.tabs.length ? source.tabs : [{ gid: null, name: null }];
+    const base = API_BASE + encodeURIComponent(sheetId);
+    const fail = e => ({ parts: [], errors: [{ tab: null, message: e.message, kind: e.kind || 'network' }], sheetId });
+
+    // 1. The tabs: which titles the configured tab ids have now (a range names a tab by its title).
+    let info;
+    try { info = await fetchApi(fetchFn, base + '?fields=' + encodeURIComponent(API_TABS_FIELDS), token, timeoutMs); } catch (e) { return fail(e); }
+    const props = (Array.isArray(info.sheets) ? info.sheets : []).map(s => (s && s.properties) || null).filter(p => p && p.title != null);
+    const errors = [], picks = [];
+    for (const t of wanted) {
+      const gid = gidOrFirst(t && t.gid);
+      const name = t && t.name ? str(t.name) : null;
+      // No tab id: the first tab that isn't hidden, as the export without a gid reads the first tab.
+      const p = gid ? props.find(x => apiGid(x) === gid) : props.find(x => x.hidden !== true) || props[0];
+      if (!p) { errors.push({ tab: name || (gid ? 'gid ' + gid : 'the first tab'), message: MSG.apiNoTab, kind: 'format' }); continue; }
+      picks.push({ gid: apiGid(p), title: str(p.title), name });
+    }
+    if (!picks.length) return { parts: [], errors, sheetId };
+
+    // 2. Those tabs' cells, links, merges and hidden rows, in one call.
+    const ranges = picks.map(p => '&ranges=' + encodeURIComponent(a1Sheet(p.title))).join('');
+    let grid;
+    try {
+      grid = await fetchApi(fetchFn, base + '?includeGridData=true' + ranges + '&fields=' + encodeURIComponent(API_GRID_FIELDS), token, timeoutMs);
+    } catch (e) { return fail(e); }
+    const sheets = Array.isArray(grid.sheets) ? grid.sheets : [];
+    const parts = [];
+    for (const p of picks) {
+      const tab = p.name || p.title || 'Sheet';
+      const s = sheets.find(x => x && x.properties && apiGid(x.properties) === p.gid);
+      if (!s) { errors.push({ tab, message: MSG.apiNoTab, kind: 'format' }); continue; }
+      try {
+        const part = extractRows(tableFromGrid(s, { tab, gid: p.gid, sheetId }), { schoolCode });
+        // The tab's own name in the sheet, kept beside a configured one so the settings page can show a mix-up.
+        part.meta.sheetTabName = p.title;
+        parts.push(part);
+      } catch (e) {
+        errors.push({ tab, message: e.kind ? e.message : MSG.noHeader, kind: 'format' });
+      }
+    }
+    return { parts, errors, sheetId };
+  }
+
   async function load(source, options) {
     const o = options || {};
     const fetchFn = typeof o.fetch === 'function' ? o.fetch
@@ -645,17 +830,18 @@
     const schoolCode = o.schoolCode != null ? o.schoolCode : 'UAS';
     const timeoutMs = o.timeoutMs != null ? Number(o.timeoutMs) : DEFAULT_TIMEOUT_MS;
     const src = source || {};
-    const kind = src.kind === 'script' ? 'script' : 'csv';
+    const kind = src.kind === 'script' || src.kind === 'api' ? src.kind : 'csv';
     let out;
     if (!fetchFn) out = { parts: [], errors: [{ tab: null, message: MSG.csvNetwork, kind: 'network' }], sheetId: null };
     else if (kind === 'script') out = await loadScript(src, fetchFn, schoolCode, timeoutMs);
+    else if (kind === 'api') out = await loadApi(src, fetchFn, schoolCode, timeoutMs, typeof o.accessToken === 'string' ? o.accessToken : '');
     else out = await loadCsv(src, fetchFn, schoolCode, timeoutMs);
     return finish(out.parts, { errors: out.errors, fetchedAt: resolveNow(o.now), source: kind, sheetId: out.sheetId || null });
   }
 
   return {
     parseSheetUrl, csvUrl, rowUrl, sheetUrl, parseScriptUrl, parseCsv, tabNameFromDisposition,
-    tableFromCsv, tablesFromScript, extractRows, parseBannedBy, fingerprint, load,
+    tableFromCsv, tablesFromScript, tableFromGrid, extractRows, parseBannedBy, fingerprint, load,
     // exposed for tests and the app
     safeHttpsUrl, colLetter, messages: MSG,
   };

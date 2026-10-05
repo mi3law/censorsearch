@@ -4,6 +4,8 @@ CensorSearch normally reads a sheet straight from Google by its link. That only 
 
 You need this only for a sheet that can't be shared by link. Setting it up takes about 10 minutes and needs no programming.
 
+**To limit the list to people who can view the sheet, use sign-in instead** (main README, [Signing in](../README.md#signing-in)): this script answers anyone who has its address. When you switch, archive this script's deployment (**Deploy**, **Manage deployments**, **Archive**), because the address keeps working until then.
+
 ## What the script shares, and with whom
 
 - **Only the list's columns:** Title, Author, ISBN, Banned By, Type, Year of Banning and Memo (the mapped columns), and any https links in those cells, such as memo links. From the rows above the header it sends two cells only: the list's title (the first filled cell) and its "updated as of…" line. Everything else, such as a Status column, the notes box beside the list or a note beside the title, stays in the sheet.
