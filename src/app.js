@@ -9,8 +9,9 @@
 
   const Sheet = window.CensorSheet;
   const Engine = window.CensorEngine;
+  const SignIn = window.CensorSignIn;
   const cfg = Object.assign(
-    { sheetUrl: '', tabs: [], scriptUrl: '', trustedScripts: [], schoolCode: 'UAS', aliasesUrl: 'aliases.json', repoUrl: '' },
+    { sheetUrl: '', tabs: [], googleClientId: '', scriptUrl: '', trustedScripts: [], schoolCode: 'UAS', aliasesUrl: 'aliases.json', repoUrl: '' },
     window.CENSORSEARCH_CONFIG || {}
   );
 
@@ -30,6 +31,10 @@
     network: "Can't read this sheet: it may not be shared by link, or a network filter may block Google.",
     semicolon: "Semicolons don't split a search yet: everything in the box was searched together. To check several titles, put each on its own line.",
     isbnFallback: 'No ISBN match. Most rows have no ISBN, so search the title and author.',
+    signinLoading: 'Loading Google sign-in…',
+    signin: 'Sign in with Google to search the list. Only people who can view the sheet can search it.',
+    signinWait: 'Sign in to search: your search will run as soon as the list arrives.',
+    signinExpired: "Your Google sign-in has run out, so the list isn't being refreshed",
     filterNote: "Extend the sheet's filter to cover the Memo column (A:G) so sorting keeps memos beside their titles.",
   };
   const FIELD_NAMES = { title: 'title', author: 'author', isbn: 'ISBN', memo: 'memo', type: 'type', bannedBy: 'Banned By' };
@@ -50,7 +55,7 @@
     overridden: false,     // ?sheet= or ?script= in the page address (a ?script= of this page's own script doesn't count)
     untrusted: false,      // ?script= to a script this page doesn't know: no sheet or row links from its claims
     scriptDigest: '',      // SHA-256 of that script's address, for config.trustedScripts
-    phase: 'loading',      // 'config' | 'loading' | 'loaded' | 'partial' | 'failed'
+    phase: 'loading',      // 'config' | 'signin' | 'loading' | 'loaded' | 'partial' | 'failed'
     configError: '',
     failure: null,         // { errors, sheetId } when nothing loaded
     data: null,            // { rows, tabs, errors, issues, fetchedAt, sheetId, signature }
@@ -58,6 +63,7 @@
     loading: null,         // in-flight load promise
     manualRetry: false,
     refreshError: null,    // { at: Date } when a background refresh failed and old data is kept
+    auth: null,            // signed-in path only: { client, ready, error, expired }
     aliases: null,
     aliasesPromise: null,
     codes: [], codeInputs: new Map(), unticked: new Set(),
@@ -166,7 +172,7 @@
   }
 
   // ---------------------------------------------------------------------------------------------
-  // Source selection: ?script= > ?sheet= > config.scriptUrl > config.sheetUrl + config.tabs
+  // Source selection: ?script= > ?sheet= > config.googleClientId (sign-in) > config.scriptUrl > config.sheetUrl + config.tabs
 
   // A gid of null means the sheet's first tab (the link had none).
   function chooseSource() {
@@ -188,14 +194,24 @@
       const gid = p.gid || (/^\d{1,12}$/.test(pageGid || '') ? pageGid : null);
       return { source: { kind: 'csv', sheetId: p.id, tabs: [{ gid, name: null }] }, overridden: true };
     }
+    const configTabs = p => {
+      const tabs = arr(cfg.tabs).filter(t => t && t.gid != null).map(t => ({ gid: String(t.gid), name: t.name ? String(t.name) : null }));
+      return tabs.length ? tabs : [{ gid: p.gid, name: null }];
+    };
+    // Signed in: each visitor reads the sheet with their own Google account, so only people who can view it can search.
+    if (str(cfg.googleClientId).trim()) {
+      if (!SignIn || !SignIn.isClientId(cfg.googleClientId)) return { error: 'The googleClientId in config.js is not a Google sign-in client ID (it ends in .apps.googleusercontent.com).' };
+      const p = Sheet.parseSheetUrl(String(cfg.sheetUrl || ''));
+      if (!p) return { error: 'The sheetUrl in config.js is not a Google Sheets link.' };
+      return { source: { kind: 'api', sheetId: p.id, tabs: configTabs(p) }, overridden: false };
+    }
     if (cfg.scriptUrl) {
       if (!ownScript) return { error: 'The scriptUrl in config.js is not an Apps Script web app link (https://script.google.com/macros/s/…/exec).' };
       return { source: Object.assign({ kind: 'script', url: ownScript, tabs: null }, ownSheet()), overridden: false };
     }
     const p = Sheet.parseSheetUrl(String(cfg.sheetUrl || ''));
     if (!p) return { error: 'The sheetUrl in config.js is not a Google Sheets link.' };
-    const tabs = arr(cfg.tabs).filter(t => t && t.gid != null).map(t => ({ gid: String(t.gid), name: t.name ? String(t.name) : null }));
-    return { source: { kind: 'csv', sheetId: p.id, tabs: tabs.length ? tabs : [{ gid: p.gid, name: null }] }, overridden: false };
+    return { source: { kind: 'csv', sheetId: p.id, tabs: configTabs(p) }, overridden: false };
   }
 
   // SHA-256 (hex) of a script address. config.trustedScripts lists these for the school's own ?script= links, so the
@@ -265,7 +281,8 @@
   async function doLoad(background) {
     let result;
     try {
-      result = await Sheet.load(state.source, { fetch: window.fetch.bind(window), schoolCode: cfg.schoolCode });
+      const accessToken = state.auth ? state.auth.client.token() : undefined;
+      result = await Sheet.load(state.source, { fetch: window.fetch.bind(window), schoolCode: cfg.schoolCode, accessToken });
     } catch (e) {
       result = { rows: [], tabs: [], issues: [], errors: [{ tab: null, message: e && e.message ? e.message : String(e), kind: 'network' }] };
     }
@@ -286,6 +303,9 @@
       errors = errors.map(e => (e.kind === 'script' ? Object.assign({}, e, { message: 'The script says: “' + sentence(e.message) + '”' }) : e));
     }
 
+    // Signed in: a sign-in that has run out (or was withdrawn) means signing in again, not a broken sheet.
+    const signedOut = !!state.auth && !rows.length && errors.length > 0 && errors.every(e => e.kind === 'auth');
+    if (signedOut) state.auth.client.forget();
     if (background) {
       // Keep the old data when a tab it had failed to load again. When every tab the source names answered, the new
       // data is what a fresh page load would show (a script that stopped returning a tab, a first tab whose id is now
@@ -293,12 +313,21 @@
       const had = state.data.tabs.map(t => str(t.gid));
       const got = new Set(tabs.map(t => str(t.gid)));
       if (!rows.length || (errors.length && !had.every(g => got.has(g)))) {
-        state.refreshError = state.refreshError || { at: new Date() };
+        if (signedOut) state.auth.expired = true;
+        else state.refreshError = state.refreshError || { at: new Date() };
         renderStatus();
         return false;
       }
     }
     pinFirstTab(tabs);
+    if (signedOut) {
+      state.data = null; state.index = null; state.shown = []; state.linkRows = [];
+      state.phase = 'signin';
+      state.auth.error = errors[0].message;
+      renderStatus(); renderSource(); renderNotes(); ui.filterBox.hidden = true;
+      renderResults();
+      return false;
+    }
     if (!rows.length) {
       state.data = null; state.index = null; state.shown = []; state.linkRows = [];
       state.phase = 'failed';
@@ -314,6 +343,7 @@
       Object.assign(state.data, { tabs, errors, issues, fetchedAt, sheetId });
       state.phase = errors.length ? 'partial' : 'loaded';
       state.refreshError = null;
+      if (state.auth) { state.auth.expired = false; state.auth.error = null; }
       renderStatus(); renderSource(); renderNotes();
       return true;
     }
@@ -345,6 +375,7 @@
     state.index = index;
     state.phase = errors.length ? 'partial' : 'loaded';
     state.refreshError = null;
+    if (state.auth) { state.auth.expired = false; state.auth.error = null; }
     state.failure = null;
     clearNotice();   // a "Checked again: now at row N" notice may no longer be true
     rebuildFilter();
@@ -450,6 +481,40 @@
     return b;
   }
 
+  // Signed-in path: opens Google's sign-in window (straight from the click, so the browser allows it), then reads the list
+  // with the new sign-in. opts.chooseAccount lets the visitor pick another account.
+  function signInButton(label, opts) {
+    const b = el('button', { type: 'button' }, label);
+    b.addEventListener('click', () => {
+      const a = state.auth;
+      const hadFocus = document.activeElement === b;
+      b.disabled = true;
+      a.client.signIn(opts).then(() => {
+        a.error = null;
+        a.expired = false;
+        return reload(state.data ? { background: true, manual: true } : {});
+      }, e => {
+        a.error = e && e.message ? e.message : SignIn.messages.failed;
+        if (!state.data) state.phase = 'signin';
+        renderStatus();
+      }).then(() => {
+        if (!hadFocus || !isFocusLost()) return;
+        const again = ui.actions.hidden ? null : ui.actions.querySelector('button');
+        if (again) again.focus(); else ui.status.focus({ preventScroll: true });
+      });
+    });
+    return b;
+  }
+
+  // Loads Google's sign-in script; on failure the status line says so and offers to try again.
+  function loadSignIn() {
+    const a = state.auth;
+    a.error = null;
+    a.ready = false;
+    renderStatus();
+    a.client.load().then(() => { a.ready = true; renderStatus(); }, e => { a.error = e.message; renderStatus(); });
+  }
+
   function sheetLinkUrl() {
     if (state.untrusted) return null;
     const sheetId = (state.data && state.data.sheetId) || (state.failure && state.failure.sheetId) || (state.source && state.source.sheetId);
@@ -525,13 +590,25 @@
     if (state.phase === 'config') {
       return { status: state.configError, actions: [state.overridden ? defaultPageLink('Use the default list') : null] };
     }
+    if (state.phase === 'signin') {
+      const a = state.auth;
+      if (!a.ready) {
+        if (!a.error) return { status: TEXT.signinLoading };
+        const again = el('button', { type: 'button' }, 'Try again');
+        again.addEventListener('click', loadSignIn);
+        return { status: a.error, actions: [again] };
+      }
+      return { status: a.error || TEXT.signin, actions: [signInButton(a.error ? 'Sign in again' : 'Sign in with Google')] };
+    }
     if (state.phase === 'loading') return { status: TEXT.loading };
     if (state.phase === 'failed') {
       const f = state.failure || { errors: [] };
       const url = sheetLinkUrl();
+      // A signed-in account that can't view the sheet: another account may (Retry would only ask the same one again).
+      const noAccess = !!state.auth && arr(f.errors).some(e => e.kind === 'access');
       return {
-        status: failureText(arr(f.errors)),
-        actions: [retryButton(), url ? ' ' : null, url ? extLink(url, 'Open the sheet') : null,
+        status: failureText(arr(f.errors)) + (noAccess ? ' Sign in with an account that can view it, or ask the sheet\'s owner for access.' : ''),
+        actions: [noAccess ? signInButton('Sign in with another account', { chooseAccount: true }) : retryButton(), url ? ' ' : null, url ? extLink(url, 'Open the sheet') : null,
           state.overridden ? el('span', { class: 'sep' }, ' · ') : null, state.overridden ? defaultPageLink('Use the default list') : null],
       };
     }
@@ -544,7 +621,10 @@
         d.errors.map(e => (e.tab || 'a tab') + ': ' + stripStop(e.message)).join('; ')));
     }
     if (state.manualRetry) warn.push('Checking the sheet again…');
-    else if (state.refreshError) warn.push("Couldn't refresh since " + hhmm(state.refreshError.at) + '; showing data fetched at ' + hhmm(d.fetchedAt) + '.');
+    else if (state.auth && state.auth.expired) {
+      warn.push(state.auth.error ? sentence(state.auth.error) : TEXT.signinExpired + '; showing data fetched at ' + hhmm(d.fetchedAt) + '.');
+      return { status: loadedText(), warning: warn.join(' '), actions: [signInButton('Sign in again')] };
+    } else if (state.refreshError) warn.push("Couldn't refresh since " + hhmm(state.refreshError.at) + '; showing data fetched at ' + hhmm(d.fetchedAt) + '.');
     return { status: loadedText(), warning: warn.join(' '), actions: warn.length ? [retryButton()] : [] };
   }
 
@@ -564,6 +644,7 @@
       if (tabs.length) ui.source.append(listText(tabs), ' of ');
       ui.source.append(url ? extLink(url, 'this Google Sheet') : 'the Google Sheet');
       if (s.kind === 'script') ui.source.append(' through its Apps Script web app');
+      else if (s.kind === 'api') ui.source.append(' with your Google sign-in');
     }
     if (state.overridden) ui.source.append(", as this page's address asks. ", defaultPageLink('Use the default list'), '.');
     else ui.source.append('.');
@@ -763,6 +844,8 @@
     if (!state.index) {
       if (state.phase === 'loading' && ui.box.value.trim()) {
         out.append(el('p', { class: 'hint' }, 'The list is still loading; your search will run as soon as it arrives.'));
+      } else if (state.phase === 'signin' && ui.box.value.trim()) {
+        out.append(el('p', { class: 'hint' }, TEXT.signinWait));
       }
       return;
     }
@@ -1190,6 +1273,7 @@
     const a = e.target && e.target.closest ? e.target.closest('a.row-link') : null;
     if (!a || a.dataset.checked === '1' || e.button !== 0) return;
     if (!state.data || !linkRow.has(a) || ageMs() < REFRESH_AFTER) return;
+    if (state.auth && !state.auth.client.token()) return;   // can't check again without signing in: open the row as loaded
     e.preventDefault();
     checkAgain(a, openBlankTab());
   }
@@ -1199,7 +1283,13 @@
 
   function maybeRefresh(minAge) {
     if (!state.data || state.loading || document.visibilityState !== 'visible') return;
-    if (ageMs() >= minAge) reload({ background: true });
+    if (ageMs() < minAge) return;
+    // A sign-in that has run out can't refresh in the background: Google's sign-in window needs a click.
+    if (state.auth && !state.auth.client.token()) {
+      if (!state.auth.expired) { state.auth.expired = true; renderStatus(); }
+      return;
+    }
+    reload({ background: true });
   }
 
   // ---------------------------------------------------------------------------------------------
@@ -1245,6 +1335,15 @@
     }
     state.source = choice.source;
     if (ui.box.value) autoGrow();
+    if (state.source.kind === 'api') {
+      // Nothing is read until the visitor signs in; Google's script loads meanwhile, so the button works at once.
+      state.auth = { client: SignIn.create(window, str(cfg.googleClientId).trim()), ready: false, error: null, expired: false };
+      state.phase = 'signin';
+      renderSource();
+      state.aliasesPromise = loadAliases();
+      loadSignIn();
+      return;
+    }
     const go = () => {
       renderSource();
       state.aliasesPromise = loadAliases();

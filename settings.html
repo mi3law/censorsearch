@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://docs.google.com https://*.googleusercontent.com https://script.google.com https://api.github.com; base-uri 'none'; form-action 'none'">
-  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' https://accounts.google.com/gsi/style; img-src 'self' data:; connect-src 'self' https://docs.google.com https://*.googleusercontent.com https://script.google.com https://sheets.googleapis.com https://accounts.google.com/gsi/ https://api.github.com; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="strict-origin">
   <meta name="robots" content="noindex">
   <meta name="color-scheme" content="light dark">
   <title>CensorSearch settings</title>
@@ -13,6 +13,7 @@
   <link rel="stylesheet" href="styles.css">
   <script defer src="config.js"></script>
   <script defer src="src/sheet.js"></script>
+  <script defer src="src/signin.js"></script>
   <script defer src="src/settings.js"></script>
 </head>
 <body>
@@ -47,6 +48,7 @@
         <fieldset id="mode-fieldset" class="group-box">
           <legend>How the page reads the list</legend>
           <p class="choice"><input type="radio" name="mode" id="mode-link" value="link"> <label for="mode-link">By link: the sheet is shared "Anyone with the link can view"</label></p>
+          <p class="choice"><input type="radio" name="mode" id="mode-signin" value="signin"> <label for="mode-signin">With Google sign-in: only people who can view the sheet can search it (see "Signing in" in the README)</label></p>
           <p class="choice"><input type="radio" name="mode" id="mode-script" value="script"> <label for="mode-script">Through the Apps Script reader, for a sheet that can't be shared by link (see apps-script/README.md)</label></p>
           <p id="mode-error" class="field-error" hidden></p>
         </fieldset>
@@ -76,6 +78,13 @@
             <p id="tab-link-note" class="note" aria-live="polite"></p>
           </div>
         </fieldset>
+
+        <div id="client-field" class="field" hidden>
+          <label for="client-id">Sign-in client ID</label>
+          <p id="client-id-help" class="help">From the Google Cloud console, under Clients: the Client ID of the web client, ending in .apps.googleusercontent.com. It is public; never paste the client secret.</p>
+          <input id="client-id" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="client-id-help">
+          <p id="client-id-error" class="field-error" hidden></p>
+        </div>
 
         <div id="script-field" class="field" hidden>
           <label for="script-url">Apps Script address</label>

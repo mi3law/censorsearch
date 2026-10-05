@@ -2,10 +2,15 @@
 // Anyone can also try another sheet without editing it: add ?sheet=<Google Sheets link> or ?script=<Apps Script /exec link>
 // to the page address. The search text itself never goes into the address.
 window.CENSORSEARCH_CONFIG = {
-  // The Google Sheet read by link (the default path). It must be shared "Anyone with the link can view".
+  // The Google Sheet. Read by link (the default path), it must be shared "Anyone with the link can view"; signed in (see
+  // googleClientId), each visitor reads it with their own Google account instead.
   sheetUrl: 'https://docs.google.com/spreadsheets/d/1LIUGEVFv4hLN2JTn2OASTBKW5mr0oXl8pWSQNGFkHck/edit?gid=0#gid=0',
   // Tabs to search, by tab id (the number after gid= in the tab's link), which survives renames; `name` is how results cite the tab.
   tabs: [{ gid: '0', name: 'Sheet1' }],
+  // Google sign-in: the OAuth client ID (…apps.googleusercontent.com; public, not a secret). When set, each visitor signs in
+  // with Google and the page reads sheetUrl's tabs with their own access, so only people who can view the sheet can search it.
+  // It takes precedence over scriptUrl. Setting it up: README.md, "Signing in".
+  googleClientId: '',
   // Apps Script web app URL (https://script.google.com/macros/s/<id>/exec). When set, the page reads through it instead of the CSV
   // link above, and the script's own tab list decides which tabs are searched (see apps-script/README.md). sheetUrl should
   // then still name the same sheet: it is the "Open the sheet" link when the script can't be reached.

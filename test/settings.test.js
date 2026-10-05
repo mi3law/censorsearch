@@ -11,6 +11,7 @@ const nodeCrypto = require('crypto');
 const S = require('../src/settings.js');
 const Sheet = require('../src/sheet.js');
 const { makeBrowser, ROOT } = require('./helpers/fake-dom.js');
+const G = require('./helpers/google.js');
 
 const read = f => fs.readFileSync(path.join(ROOT, f), 'utf8');
 const CONFIG_JS = read('config.js');
@@ -43,6 +44,11 @@ function readConfigObject(jsText) {
 }
 
 const repoCfg = () => plain(readConfigObject(CONFIG_JS).cfg);
+// config.js changes whenever the maintainers save new settings, so tests that need particular settings start from these:
+// the repository's, reading v1's test sheet by link.
+const V1_SHEET_URL = 'https://docs.google.com/spreadsheets/d/1fnfj7W8ZZvBSFNTfkyqPKupGUrvw79etZYF_ZHWVhzo/edit?gid=0#gid=0';
+const linkCfg = () => Object.assign(repoCfg(), { sheetUrl: V1_SHEET_URL, tabs: [{ gid: '0', name: 'Sheet1' }], googleClientId: '', scriptUrl: '', trustedScripts: [] });
+const CLIENT_ID = G.CLIENT_ID;
 
 // ------------------------------------------------------------------------------------------------
 // config.js text
@@ -74,7 +80,7 @@ test('buildConfigJs: other tabs, a script and trusted codes round-trip, keeping 
 test('buildConfigJs: missing settings get the search page defaults; a tab without a name stays without one', () => {
   const text = S.buildConfigJs({ sheetUrl: SHEET_URL, tabs: [{ gid: 7 }] });
   const cfg = plain(readConfigObject(text).cfg);
-  assert.deepEqual(cfg, { sheetUrl: SHEET_URL, tabs: [{ gid: '7' }], scriptUrl: '', trustedScripts: [], schoolCode: 'UAS', aliasesUrl: 'aliases.json', repoUrl: '' });
+  assert.deepEqual(cfg, { sheetUrl: SHEET_URL, tabs: [{ gid: '7' }], googleClientId: '', scriptUrl: '', trustedScripts: [], schoolCode: 'UAS', aliasesUrl: 'aliases.json', repoUrl: '' });
 });
 
 test("hostile values round-trip exactly and can't inject code or end the file early", () => {
@@ -85,7 +91,7 @@ test("hostile values round-trip exactly and can't inject code or end the file ea
   ];
   hostile.forEach((h, i) => {
     const cfg = {
-      sheetUrl: h, tabs: [{ gid: h, name: h }, { gid: '0', name: h + h }], scriptUrl: h, trustedScripts: [h, 'x' + h],
+      sheetUrl: h, tabs: [{ gid: h, name: h }, { gid: '0', name: h + h }], googleClientId: h, scriptUrl: h, trustedScripts: [h, 'x' + h],
       schoolCode: h, aliasesUrl: h, repoUrl: h,
     };
     cfg['extra' + i] = { value: h, list: [h, 1, true, null] };
@@ -150,17 +156,17 @@ test('buildConfigJs keeps an alias list that is switched off switched off, as th
 // Validation
 
 function formFrom(cfg, over) {
-  const c = cfg || repoCfg();
+  const c = cfg || linkCfg();
   return Object.assign({
-    mode: c.scriptUrl ? 'script' : 'link', sheetUrl: c.sheetUrl, tabs: (c.tabs || []).map(t => ({ gid: t.gid, name: t.name })),
-    scriptUrl: c.scriptUrl, schoolCode: c.schoolCode, trustedScripts: (c.trustedScripts || []).join('\n'),
+    mode: c.googleClientId ? 'signin' : c.scriptUrl ? 'script' : 'link', sheetUrl: c.sheetUrl, tabs: (c.tabs || []).map(t => ({ gid: t.gid, name: t.name })),
+    googleClientId: c.googleClientId, scriptUrl: c.scriptUrl, schoolCode: c.schoolCode, trustedScripts: (c.trustedScripts || []).join('\n'),
     aliasesUrl: c.aliasesUrl, repoUrl: c.repoUrl, extra: {}, original: c,
   }, over || {});
 }
 const fieldsOf = v => v.errors.map(e => e.field);
 
 test('validate: the current settings are valid and give back the same config.js', () => {
-  const v = S.validate(formFrom());
+  const v = S.validate(formFrom(repoCfg()));
   assert.deepEqual(v.errors, []);
   assert.equal(S.buildConfigJs(v.cfg), CONFIG_JS);
 });
@@ -178,7 +184,7 @@ test('validate: sheet links', () => {
   }
   // Typed exactly as it already is in config.js: kept as written there, even when not in the plain form.
   const hand = 'https://docs.google.com/spreadsheets/d/' + SID + '/edit#gid=0';
-  assert.equal(S.validate(formFrom(Object.assign(repoCfg(), { sheetUrl: hand }))).cfg.sheetUrl, hand);
+  assert.equal(S.validate(formFrom(Object.assign(linkCfg(), { sheetUrl: hand }))).cfg.sheetUrl, hand);
   const bad = [
     ['', S.messages.sheetMissing],
     ['https://docs.google.com/spreadsheets/d/e/2PACX-1vSomePublishedId0123456789/pubhtml', S.messages.sheetPublished],
@@ -212,6 +218,35 @@ test('validate: Apps Script mode needs a /exec address, keeps the tabs as they a
   // Back to link mode: the script address is dropped.
   assert.equal(S.validate(formFrom(null, { mode: 'link', scriptUrl: SCRIPT_URL })).cfg.scriptUrl, '');
   assert.deepEqual(fieldsOf(S.validate(formFrom(null, { mode: 'other' }))), ['mode']);
+});
+
+test('validate: sign-in mode needs a client ID (never the secret), searches the listed tabs, and drops the script address', () => {
+  const v = S.validate(formFrom(null, { mode: 'signin', googleClientId: '  ' + CLIENT_ID + ' ', scriptUrl: SCRIPT_URL }));
+  assert.deepEqual(v.errors, []);
+  assert.equal(v.cfg.googleClientId, CLIENT_ID);
+  assert.equal(v.cfg.scriptUrl, '', 'one way of reading at a time');
+  assert.deepEqual(v.cfg.tabs, [{ gid: '0', name: 'Sheet1' }]);
+  assert.deepEqual(S.sourceFor(v.cfg), { kind: 'api', sheetId: '1fnfj7W8ZZvBSFNTfkyqPKupGUrvw79etZYF_ZHWVhzo', tabs: [{ gid: '0', name: 'Sheet1' }] });
+  const text = S.buildConfigJs(v.cfg);
+  assert.match(text, new RegExp("\\n {2}googleClientId: '" + CLIENT_ID.replace(/\./g, '\\.') + "',\\n"));
+  assert.deepEqual(plain(readConfigObject(text).cfg), plain(v.cfg));
+  const bad = [
+    ['', S.messages.clientMissing],
+    [G.FAKE_SECRET, S.messages.clientSecret],
+    ['123456789012' + '.apps.googleusercontent' + '.com', S.messages.clientBad],
+    ['https://console.cloud.google.com/auth/clients/' + CLIENT_ID, S.messages.clientBad],
+  ];
+  for (const [input, msg] of bad) {
+    assert.deepEqual(S.validate(formFrom(null, { mode: 'signin', googleClientId: input })).errors, [{ field: 'googleClientId', message: msg }], input);
+  }
+  // Sign-in needs the sheet link and the tabs, as by link.
+  assert.deepEqual(fieldsOf(S.validate(formFrom(null, { mode: 'signin', googleClientId: CLIENT_ID, sheetUrl: '', tabs: [] }))), ['sheetUrl', 'tabs']);
+  // Another mode drops the client ID.
+  assert.equal(S.validate(formFrom(null, { mode: 'link', googleClientId: CLIENT_ID })).cfg.googleClientId, '');
+  assert.equal(S.validate(formFrom(null, { mode: 'script', googleClientId: CLIENT_ID, scriptUrl: SCRIPT_URL })).cfg.googleClientId, '');
+  // The client ID wins over a script address, as on the search page.
+  assert.equal(S.sourceFor({ sheetUrl: SHEET_URL, googleClientId: CLIENT_ID, scriptUrl: SCRIPT_URL, tabs: [] }).kind, 'api');
+  assert.equal(S.sourceFor({ sheetUrl: SHEET_URL, googleClientId: 'nope', tabs: [] }), null);
 });
 
 test('validate: tab ids and names', () => {
@@ -298,7 +333,7 @@ test('validate: errors come in the order of the form, and other settings pass th
 });
 
 test('sourceFor reads what the search page reads for the same config values', () => {
-  assert.deepEqual(S.sourceFor(repoCfg()), { kind: 'csv', sheetId: '1fnfj7W8ZZvBSFNTfkyqPKupGUrvw79etZYF_ZHWVhzo', tabs: [{ gid: '0', name: 'Sheet1' }] });
+  assert.deepEqual(S.sourceFor(linkCfg()), { kind: 'csv', sheetId: '1fnfj7W8ZZvBSFNTfkyqPKupGUrvw79etZYF_ZHWVhzo', tabs: [{ gid: '0', name: 'Sheet1' }] });
   assert.deepEqual(S.sourceFor({ sheetUrl: 'https://docs.google.com/spreadsheets/d/' + SID + '/edit#gid=9', tabs: [] }), { kind: 'csv', sheetId: SID, tabs: [{ gid: '9', name: null }] });
   assert.deepEqual(S.sourceFor({ sheetUrl: SHEET_URL, scriptUrl: SCRIPT_URL, tabs: [{ gid: '0', name: 'A' }] }),
     { kind: 'script', url: SCRIPT_URL, tabs: null, sheetId: SID, sheetGid: '0' });
@@ -600,6 +635,7 @@ async function openSettings(o = {}) {
         return new Response('nope', { status: 400 });
       }
       if (u.hostname === 'script.google.com') return state.script(u);
+      if (u.hostname === 'sheets.googleapis.com') return state.api(url, init);
       if (u.hostname === 'api.github.com') {
         const key = init.method + ' ' + url.replace(GH_REPO, '');
         const r = state.github[key];
@@ -610,6 +646,7 @@ async function openSettings(o = {}) {
     },
   });
   b.state = state;
+  if (o.google) b.win.google = o.google;
   b.start();
   await b.flush();
   b.ghCalls = () => b.fetchCalls.filter(c => c.url.startsWith('https://api.github.com'));
@@ -629,12 +666,16 @@ const githubOk = (onPut) => ({
 
 test('settings.html: CSP, noindex, title, deferred scripts in order, nothing inline, labels and descriptions point at real ids', () => {
   const html = read('settings.html');
-  assert.match(html, /<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https:\/\/docs\.google\.com https:\/\/\*\.googleusercontent\.com https:\/\/script\.google\.com https:\/\/api\.github\.com; base-uri 'none'; form-action 'none'">/);
-  assert.match(html, /<meta name="referrer" content="no-referrer">/);
+  assert.ok(html.includes('<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; ' +
+    "script-src 'self' https://accounts.google.com/gsi/client; style-src 'self' https://accounts.google.com/gsi/style; img-src 'self' data:; " +
+    "connect-src 'self' https://docs.google.com https://*.googleusercontent.com https://script.google.com https://sheets.googleapis.com " +
+    "https://accounts.google.com/gsi/ https://api.github.com; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'\">"), 'CSP');
+  // Google's sign-in checks where its window was opened from; only the site's address is sent, never a page's path.
+  assert.match(html, /<meta name="referrer" content="strict-origin">/);
   assert.match(html, /<meta name="robots" content="noindex">/);
   assert.match(html, /<title>CensorSearch settings<\/title>/);
-  assert.deepEqual([...html.matchAll(/<script ([^>]*)><\/script>/g)].map(m => m[1]), ['defer src="config.js"', 'defer src="src/sheet.js"', 'defer src="src/settings.js"']);
-  assert.equal((html.match(/<script/g) || []).length, 3, 'no other scripts');
+  assert.deepEqual([...html.matchAll(/<script ([^>]*)><\/script>/g)].map(m => m[1]), ['defer src="config.js"', 'defer src="src/sheet.js"', 'defer src="src/signin.js"', 'defer src="src/settings.js"']);
+  assert.equal((html.match(/<script/g) || []).length, 4, 'no other scripts');
   assert.doesNotMatch(html, /\sstyle=|<style|\son[a-z]+=|javascript:/i, 'no inline styles or handlers');
   assert.match(html, /<link rel="stylesheet" href="styles\.css">/);
   assert.match(html, /<a href="\.\/">Back to the search page<\/a>/);
@@ -999,7 +1040,7 @@ test('a stale cached config.js: the page reads the served file again and starts 
   assert.match(b.text('current-list'), /School's Banned By codeNEW\./);
   assert.equal(b.text('diff-summary'), 'No changes yet: these are the settings in config.js.');
   assert.equal(b.$('current-note').hidden, true);
-  assert.equal(b.doc.querySelectorAll('script').length, 3, 'the extra script element is removed again');
+  assert.equal(b.doc.querySelectorAll('script').length, 4, 'the extra script element is removed again');
 });
 
 test('a hand-edited config.js: a note, and the diff shows the layout change', async () => {
@@ -1297,4 +1338,87 @@ test('the note under "Add a tab from its link" goes once the tab it names is gon
   b.type(b.$('sheet-url'), 'https://docs.google.com/spreadsheets/d/' + SID + '/edit', { change: false });
   assert.equal(b.text('tab-link-note'), '');
   assert.deepEqual(b.rows().map(r => r.querySelector('.gid-input').value), ['77'], 'the tab itself stays');
+});
+
+// ------------------------------------------------------------------------------------------------
+// Signed in
+
+const API_SHEET = [{ title: 'Sheet1', gid: '0', rows: HEAD.concat(ROWS0).map(l => l.split(',')) }];
+
+test('sign-in mode: the current settings in plain words, and the form (SIGNIN-6)', async () => {
+  const b = await openSettings({ served: S.buildConfigJs(Object.assign({}, PAGE_CFG, { googleClientId: CLIENT_ID })), google: G.fakeGis() });
+  const cur = b.text('current-list');
+  assert.match(cur, /How the page reads the listWith Google sign-in: each visitor signs in and reads this Google Sheet \(sheet 1AbCdE…abcd\) with their own Google account, so only people who can view it can search it\./);
+  assert.match(cur, new RegExp('Sign-in client ID' + CLIENT_ID.replace(/\./g, '\\.') + '\\.'));
+  assert.match(cur, /Tabs searchedSheet1 \(tab id 0\)\./);
+  assert.equal(b.$('mode-signin').checked, true);
+  assert.equal(b.$('client-field').hidden, false);
+  assert.equal(b.$('client-id').value, CLIENT_ID);
+  assert.equal(b.$('tabs-fieldset').hidden, false);
+  assert.equal(b.$('script-field').hidden, true);
+  assert.match(b.text('sheet-url-help'), /doesn't need to be shared by link/);
+  assert.equal(b.text('diff-summary'), 'No changes yet: these are the settings in config.js.');
+});
+
+test('sign-in check: signs in from the click, reads with the token, and warns about link sharing and the old script (SIGNIN-7)', async () => {
+  const gis = G.fakeGis();
+  const served = S.buildConfigJs(Object.assign({}, PAGE_CFG, { scriptUrl: SCRIPT_URL }));
+  const b = await openSettings({ served, google: gis, github: githubOk() });
+  b.state.api = G.sheetsApi(SID, API_SHEET);
+  b.click(b.$('mode-signin'));
+  await b.flush();
+  assert.equal(b.$('client-field').hidden, false);
+  assert.equal(b.$('tabs-fieldset').hidden, false);
+  b.type(b.$('client-id'), CLIENT_ID);
+  await b.check();
+  assert.deepEqual(gis.requests, [{ clientId: CLIENT_ID, scope: G.SCOPE, prompt: '' }]);
+  assert.ok(b.state.api.calls.length >= 2 && b.state.api.calls.every(c => c.init.headers.Authorization === 'Bearer ' + G.TOKEN));
+  assert.match(b.text('check-status'), /^Checked at \d\d:\d\d: 1 tab, 4 items, no problems, 2 warnings \(see below\)\. You can save these settings\./);
+  const results = b.text('check-results');
+  assert.match(results, /Read with your Google sign-in from spreadsheet 1AbCdE…abcd, as each visitor will read it with theirs\./);
+  assert.match(results, /This sheet is also shared "Anyone with the link can view", so anyone with its link can read it without signing in\./);
+  assert.match(results, /The current settings read through an Apps Script reader, which keeps answering anyone who has its address after this change\. Once the new settings work, archive its deployment/);
+  assert.ok(!b.everything().includes(G.TOKEN), 'the token never reaches the page');
+  assert.match(b.text('diff'), /googleClientId: '123456789012-/);
+
+  // Checked again: the sign-in is reused, and a sheet that isn't link-shared gets no link warning.
+  b.state.sheet = () => new Response('<!doctype html><title>Sign in</title>', { status: 200, headers: { 'content-type': 'text/html' } });
+  await b.check();
+  assert.equal(gis.requests.length, 1, 'no second sign-in');
+  assert.doesNotMatch(b.text('check-results'), /also shared "Anyone with the link can view"/);
+  assert.match(b.text('check-status'), /1 warning \(see below\)/);
+});
+
+test("sign-in check: an account that can't view the sheet blocks saving, and the next check lets the maintainer choose another (SIGNIN-8)", async () => {
+  let allowed = false;
+  const gis = G.fakeGis();
+  const b = await openSettings({ served: S.buildConfigJs(Object.assign({}, PAGE_CFG, { googleClientId: CLIENT_ID })), google: gis });
+  b.state.api = G.sheetsApi(SID, API_SHEET, { canView: () => allowed });
+  await b.check();
+  assert.match(b.text('check-status'), /^The check found a problem, so these settings can't be saved yet\./);
+  assert.match(b.text('check-results'), /The Google account you signed in with can't view this sheet\. Check the list again to sign in with an account that can view it\./);
+  allowed = true;
+  await b.check();
+  assert.deepEqual(gis.requests.map(r => r.prompt), ['', 'select_account']);
+  assert.match(b.text('check-status'), /^Checked at \d\d:\d\d: 1 tab, 4 items, no problems/);
+
+  // Sign-in that fails (the window closed) says so and checks nothing.
+  const c = await openSettings({ served: S.buildConfigJs(Object.assign({}, PAGE_CFG, { googleClientId: CLIENT_ID })), google: G.fakeGis([{ popup: 'popup_closed' }]) });
+  c.state.api = G.sheetsApi(SID, API_SHEET);
+  await c.check();
+  assert.equal(c.text('check-status'), "Couldn't check the list: The sign-in window closed before signing in finished.");
+  assert.equal(c.state.api.calls.length, 0);
+});
+
+test("sign-in check: Google's script not loaded yet, or blocked, asks to check again (SIGNIN-9)", async () => {
+  const b = await openSettings({ served: S.buildConfigJs(Object.assign({}, PAGE_CFG, { googleClientId: CLIENT_ID })) });
+  b.state.api = G.sheetsApi(SID, API_SHEET);
+  // The fake browser can't load https://accounts.google.com/gsi/client, as a network filter wouldn't let it.
+  assert.ok(b.scriptLoads.includes('https://accounts.google.com/gsi/client'), 'loaded as soon as the page shows sign-in mode');
+  await b.check();
+  assert.equal(b.text('check-status'), "Google sign-in didn't load: a network filter or browser extension may block accounts.google.com. Check the list again to try once more.");
+  assert.equal(b.state.api.calls.length, 0);
+  b.win.google = G.fakeGis();
+  await b.check();
+  assert.match(b.text('check-status'), /^Checked at/);
 });
