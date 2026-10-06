@@ -48,10 +48,6 @@
     <section id="inv-tabs-box" class="settings-section" aria-labelledby="inv-tabs-h" hidden>
       <h2 id="inv-tabs-h">Tabs to check</h2>
       <p id="inv-sheet-name" class="check-source"></p>
-      <div class="group-box">
-        <p class="choice"><input type="checkbox" id="inv-write"> <label for="inv-write">Also write the results into the inventory sheet</label></p>
-        <p class="help">Adds a tab named “CensorSearch results” to the inventory sheet, or replaces it if it is there, listing every title that matched. The classroom tabs are not changed. Google will ask you to let CensorSearch edit your Google Sheets, and your account needs edit access to the inventory.</p>
-      </div>
       <p class="filter-actions">
         <button type="button" id="inv-check" class="inv-check">Check the selected tabs</button>
         <span class="inv-divider" aria-hidden="true"></span>
@@ -59,6 +55,10 @@
         <button type="button" id="inv-none">Clear all</button>
         <button type="button" id="inv-only" hidden></button>
       </p>
+      <div class="inv-write">
+        <p class="choice"><input type="checkbox" id="inv-write" aria-describedby="inv-write-tip"> <label for="inv-write">Also write the results into the inventory sheet (in a new separate tab)</label></p>
+        <p id="inv-write-tip" class="inv-tooltip" role="tooltip">Adds a tab named “CensorSearch results” to the inventory sheet, or replaces it if it is there, listing every title that matched. The classroom tabs are not changed. Google will ask you to let CensorSearch edit your Google Sheets, and your account needs edit access to the inventory.</p>
+      </div>
       <details id="inv-tabs-details" class="group-box inv-tabs-details" open>
         <summary id="inv-count">Tabs</summary>
         <fieldset class="inv-tabs-fieldset">

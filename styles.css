@@ -650,6 +650,31 @@ summary { cursor: pointer; }
 .inv-tabs-details > summary { font-weight: 600; min-height: 32px; }
 .inv-tabs-details[open] > summary { margin-bottom: .25rem; }
 .inv-divider { flex: none; width: 1px; margin: 6px 4px; background: var(--edge); }
+/* The write-back option: its explanation shows as a tooltip above it on hover or keyboard focus. */
+.inv-write { position: relative; width: fit-content; max-width: 100%; margin: .25rem 0 .75rem; }
+.inv-write .choice { margin: 0; min-height: 36px; }
+.inv-write input { width: 18px; height: 18px; accent-color: var(--ink); }
+.inv-tooltip {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 2;
+  width: min(30rem, calc(100vw - 32px));
+  margin: 0;
+  padding: .5rem .75rem;
+  background: var(--strip);
+  color: var(--ink);
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .45);
+  font-size: .875rem;
+  line-height: 1.4;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity .12s;
+  pointer-events: none;
+}
+.inv-write:hover .inv-tooltip, .inv-write:focus-within .inv-tooltip { visibility: visible; opacity: 1; }
 .inv-tabs-fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .inv-tab-list { list-style: none; margin: 0; padding: 0; columns: 15rem auto; column-gap: 1.5rem; }
 .inv-tab-list .choice { break-inside: avoid; margin: 0; min-height: 36px; align-items: center; }
