@@ -37,7 +37,7 @@
     status: $('inv-status'), list: $('inv-list'), signin: $('inv-signin'),
     form: $('inv-form'), url: $('inv-url'), find: $('inv-find'), urlError: $('inv-url-error'),
     tabsBox: $('inv-tabs-box'), sheetName: $('inv-sheet-name'), all: $('inv-all'), none: $('inv-none'), only: $('inv-only'),
-    count: $('inv-count'), tabList: $('inv-tab-list'), write: $('inv-write'), check: $('inv-check'),
+    count: $('inv-count'), tabsDetails: $('inv-tabs-details'), tabList: $('inv-tab-list'), write: $('inv-write'), check: $('inv-check'),
     progressText: $('inv-progress-text'), progress: $('inv-progress'),
     report: $('inv-report'), summary: $('inv-summary'), writeStatus: $('inv-write-status'),
     download: $('inv-download'), downloadSummary: $('inv-download-summary'),
@@ -240,6 +240,7 @@
       return el('li', { class: 'choice' }, input, ' ', label);
     });
     ui.tabList.replaceChildren(...items);
+    ui.tabsDetails.open = true;
     const linked = s.gid != null ? s.tabs.find(t => t.gid === s.gid && t.title !== Inv.RESULTS_TAB) : null;
     ui.only.hidden = !(linked && state.boxes.length > 1);
     if (linked) ui.only.textContent = 'Only “' + linked.title + '”';
@@ -282,6 +283,7 @@
       auth = state.read.token() ? Promise.resolve() : state.read.signIn();
     }
     state.running = true;
+    ui.tabsDetails.open = false;   // the list folds away so the progress and report come into view
     updateCount();
     auth.then(() => run(tabs, write), err => {
       setStatus(err && err.message ? err.message : SignIn.messageFor('failed'), true);

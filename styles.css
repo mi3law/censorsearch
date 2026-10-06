@@ -647,6 +647,9 @@ summary { cursor: pointer; }
 /* Inventory check page (inventory.html): the settings page's form parts, a wider column for the summary table, and
    one sign per matched inventory title (filled: likely banned; dashed: worth a look). */
 .wide .site-header, .wide .page, .wide .foot { max-width: 52rem; }
+.inv-tabs-details > summary { font-weight: 600; min-height: 32px; }
+.inv-tabs-details[open] > summary { margin-bottom: .25rem; }
+.inv-tabs-fieldset { margin: 0; padding: 0; border: 0; min-width: 0; }
 .inv-tab-list { list-style: none; margin: 0; padding: 0; columns: 15rem auto; column-gap: 1.5rem; }
 .inv-tab-list .choice { break-inside: avoid; margin: 0; min-height: 36px; align-items: center; }
 .inv-tab-list input { width: 18px; height: 18px; accent-color: var(--ink); }

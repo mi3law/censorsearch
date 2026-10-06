@@ -52,16 +52,19 @@
         <button type="button" id="inv-all">Select all</button>
         <button type="button" id="inv-none">Clear all</button>
         <button type="button" id="inv-only" hidden></button>
+        <button type="button" id="inv-check" class="inv-check">Check the selected tabs</button>
       </p>
-      <fieldset class="group-box">
-        <legend id="inv-count">Tabs</legend>
-        <ul id="inv-tab-list" class="inv-tab-list"></ul>
-      </fieldset>
+      <details id="inv-tabs-details" class="group-box inv-tabs-details" open>
+        <summary id="inv-count">Tabs</summary>
+        <fieldset class="inv-tabs-fieldset">
+          <legend class="visually-hidden">Tabs to check</legend>
+          <ul id="inv-tab-list" class="inv-tab-list"></ul>
+        </fieldset>
+      </details>
       <div class="group-box">
         <p class="choice"><input type="checkbox" id="inv-write"> <label for="inv-write">Also write the results into the inventory sheet</label></p>
         <p class="help">Adds a tab named “CensorSearch results” to the inventory sheet, or replaces it if it is there, listing every title that matched. The classroom tabs are not changed. Google will ask you to let CensorSearch edit your Google Sheets, and your account needs edit access to the inventory.</p>
       </div>
-      <p><button type="button" id="inv-check">Check the selected tabs</button></p>
     </section>
 
     <p id="inv-progress-text" class="status-line" aria-live="polite" hidden></p>

@@ -237,8 +237,10 @@ test('page: sign in, find the tabs, check them, and read the summary and each ta
   assert.equal(b.text('inv-count'), 'Tabs (3 of 3 selected)');
   assert.equal(b.text('inv-only'), 'Only “Rm 12”');
   assert.equal(b.$('inv-only').hidden, false);
+  assert.equal(b.$('inv-tabs-details').open, true);
 
   b.click(b.$('inv-check'));
+  assert.equal(b.$('inv-tabs-details').open, false, 'the tab list folds away once the check starts');
   await b.flush();
   await b.advance(10);
   await b.flush();
@@ -310,6 +312,7 @@ test('page: writing back asks for edit access from the click, then adds the resu
   b.click(b.$('inv-find'));
   b.submit(b.$('inv-form'));
   await b.flush();
+  assert.equal(b.$('inv-tabs-details').open, true, 'finding the tabs again opens the list');
   assert.match(b.$('inv-tab-list').textContent, /CensorSearch results \(this page's own results; not checked\)/);
   assert.equal(b.text('inv-count'), 'Tabs (3 of 3 selected)');
   b.click(b.$('inv-check'));
