@@ -288,6 +288,22 @@ test('loaded state, a card, and the no-results box', async () => {
   assert.match(p.text('results'), /the author's surname alone/);
 });
 
+test('before a search, a "View the entire list" button opens the sheet; it goes while a search is typed', async () => {
+  const p = await loaded();
+  const viewAll = () => p.$('results').querySelectorAll('a').filter(a => a.textContent === 'View the entire list');
+  assert.equal(viewAll().length, 1);
+  assert.equal(viewAll()[0].href, 'https://docs.google.com/spreadsheets/d/' + SID + '/edit?gid=0#gid=0');
+  assert.equal(viewAll()[0].target, '_blank');
+  await p.type('zebra tales');
+  assert.equal(viewAll().length, 0);
+  await p.type('');
+  assert.equal(viewAll().length, 1);
+
+  // No sheet link (an unknown ?script=): no button
+  const q = await loaded({ href: 'https://school.example/censorsearch/?script=' + encodeURIComponent(OTHER_SCRIPT), fetch: stubFetch(() => jsonResponse(scriptBody(SID))) });
+  assert.equal(q.$('results').querySelectorAll('a').length, 0);
+});
+
 // ------------------------------------------------------------------------------------------------
 // Banned By filter: never hide silently, never report a hidden match as "no listing"
 
