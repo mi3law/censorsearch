@@ -429,10 +429,12 @@ test('multi-line: tabs sort the lines, banned first and chosen by default; "All 
   assert.equal(p.focused(), p.tab('none'));
 });
 
-test('multi-line: no tabs when every line has the same outcome', async () => {
+test('multi-line: tabs show even when every line has the same outcome', async () => {
   const p = await loaded();
   await p.type('zebra tales\nharbor lights');
-  assert.equal(p.$('results').querySelector('.line-tabs'), null);
+  const tabs = p.$('results').querySelector('.line-tabs').querySelectorAll('button');
+  assert.deepEqual(tabs.map(t => t.textContent), ['Banned (2)', 'All lines (2)']);
+  assert.equal(p.tab('listed').getAttribute('aria-selected'), 'true');
   assert.equal(p.lines().length, 2);
 });
 
