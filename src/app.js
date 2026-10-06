@@ -1040,10 +1040,9 @@
     const unloaded = without ? unloadedNote() : null;
     if (unloaded) out.append(unloaded);
 
-    // Tabs only when the lines differ: with one kind of outcome every tab would show the same rows.
+    // Tabs always, even when every line has the same outcome, so a list always looks the same and its counts show at a glance.
     const tabs = LINE_TABS.map(t => Object.assign({}, t, { lines: t.outcomes ? lines.filter(x => t.outcomes.includes(x.outcome)) : lines }))
       .filter(t => t.lines.length);
-    if (tabs.length <= 2) { out.append(...lines.map(lineSection)); return; }
     // The chosen tab stays chosen while it has lines (a filter change can empty it for a while).
     const current = tabs.find(t => t.key === state.lineTab) || tabs[0];
     const bar = el('div', { class: 'line-tabs', role: 'tablist', 'aria-label': 'Show lines' });
