@@ -849,6 +849,12 @@
       }
       return;
     }
+    // Before a search, a plain button to the whole sheet: "(from the sheet)" in the small print is easy to miss.
+    if (!ui.box.value.trim()) {
+      const url = sheetLinkUrl();
+      if (url) out.append(el('p', { class: 'view-all' }, extLink(url, 'View the entire list', 'button-link')));
+      return;
+    }
     const run = state.run;
     if (!run) return;
     if (run.kind === 'multi') renderMulti(run, out);

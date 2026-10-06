@@ -386,6 +386,8 @@ summary { cursor: pointer; }
   text-decoration: none;
 }
 .button-link:hover { border-color: var(--ink); }
+.view-all { margin: 16px 0 0; }
+.view-all .button-link { display: inline-block; margin-top: 0; padding: 10px 24px; }
 
 /* Reading list: one row per pasted line, the outcome in words on the right, signs under the rows that have any */
 .line {
