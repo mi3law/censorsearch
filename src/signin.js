@@ -12,6 +12,8 @@
 
   const GIS_URL = 'https://accounts.google.com/gsi/client';
   const SCOPE = 'https://www.googleapis.com/auth/spreadsheets.readonly';
+  // Only the inventory check's optional "write the results into the sheet" asks for this, and only when a teacher ticks it.
+  const WRITE_SCOPE = 'https://www.googleapis.com/auth/spreadsheets';
   const CLIENT_ID_RE = /^\d{6,30}-[a-z0-9]{8,64}\.apps\.googleusercontent\.com$/;
   const EARLY = 60 * 1000;         // a token this close to running out counts as run out
   const LOAD_TIMEOUT = 20000;
@@ -24,6 +26,7 @@
     admin: "The school's Google settings don't let this page read Google Sheets. Ask the school's IT to allow CensorSearch.",
     internal: "Only the school's Google accounts can sign in here. Sign in with your school account.",
     scope: "Your Google sign-in didn't give this page permission to see the sheet. Sign in again and allow it.",
+    writeScope: "Your Google sign-in didn't give this page permission to edit Google Sheets, so it can't write the results into the sheet.",
     failed: "Google sign-in didn't work. Try again.",
   };
 
@@ -38,6 +41,7 @@
       case 'admin_policy_enforced': return MSG.admin;
       case 'org_internal': return MSG.internal;
       case 'scope': return MSG.scope;
+      case 'writeScope': return MSG.writeScope;
       case 'load': return MSG.load;
       default: return MSG.failed;
     }
@@ -81,8 +85,10 @@
     return p;
   }
 
-  // win: the page's window. clientId: the OAuth client ID (public; it names the app to Google).
-  function create(win, clientId) {
+  // win: the page's window. clientId: the OAuth client ID (public; it names the app to Google). opts.scope: WRITE_SCOPE for
+  // a client that may change sheets (the default reads only).
+  function create(win, clientId, opts) {
+    const scope = opts && opts.scope === WRITE_SCOPE ? WRITE_SCOPE : SCOPE;
     let client = null, pending = null, token = null, expiresAt = 0;
     const gis = () => gisOf(win);
 
@@ -92,7 +98,7 @@
       if (!p) return;
       if (!resp || resp.error || !resp.access_token) { p.reject(signInError(resp && resp.error)); return; }
       const o = gis();
-      if (o && typeof o.hasGrantedAllScopes === 'function' && !o.hasGrantedAllScopes(resp, SCOPE)) { p.reject(signInError('scope')); return; }
+      if (o && typeof o.hasGrantedAllScopes === 'function' && !o.hasGrantedAllScopes(resp, scope)) { p.reject(signInError(scope === SCOPE ? 'scope' : 'writeScope')); return; }
       token = String(resp.access_token);
       const seconds = Number(resp.expires_in);
       expiresAt = Date.now() + (Number.isFinite(seconds) && seconds > 0 ? seconds : 3600) * 1000;
@@ -111,7 +117,7 @@
           if (!client) {
             client = o.initTokenClient({
               client_id: String(clientId).trim(),
-              scope: SCOPE,
+              scope,
               callback: settle,
               error_callback: err => settle({ error: (err && err.type) || 'failed' }),
             });
@@ -134,5 +140,5 @@
     };
   }
 
-  return { create, loadGis, isReady: win => !!gisOf(win), isClientId, messageFor, SCOPE, GIS_URL, messages: MSG };
+  return { create, loadGis, isReady: win => !!gisOf(win), isClientId, messageFor, SCOPE, WRITE_SCOPE, GIS_URL, messages: MSG };
 });

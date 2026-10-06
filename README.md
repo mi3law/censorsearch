@@ -15,6 +15,23 @@ Type all or part of a title, an author's name or an ISBN. Results update as you 
 
 Paste several titles on separate lines to check a reading list; each line is searched on its own.
 
+## Checking a classroom inventory
+
+[inventory.html](inventory.html) (linked from the search page's Help) checks a whole inventory sheet at once, instead of pasting each tab's titles into the search box. It suits a sheet with one tab per classroom, each with a Title column (such as "Book Title") and usually an Author column (such as "Author/Creator"), with its header in the first 10 rows. A teacher:
+
+1. Signs in with Google. The page reads the banned list and the inventory with the teacher's own access, so it needs [sign-in](#signing-in) set up, and the inventory needn't be shared any wider.
+2. Pastes the inventory's link and chooses its tabs. Every tab is ticked except hidden ones; with a link to one tab, "Only …" picks just that one.
+3. Checks them. Every title is searched against the banned list in the browser, in background workers, so a sheet of 120 tabs and 35,000 titles takes seconds.
+
+The report starts with one row per tab: the room named in the tab's first row, the titles checked, the matches, and what the tab's "Checked and updated by" line says (or that nobody filled it in). Then each tab lists its matches, each linking to its row in the inventory and to the listing in the banned list:
+
+- **Likely banned**: the title and author match a listing; the same title, where neither side gives the author; a listing that covers the whole series; or the same ISBN.
+- **Worth a look**: a similar title, or the same title by another author.
+
+An inventory holds hundreds of ordinary titles, so the check is stricter than the search box: it counts only the search's main tier, never "possible matches", and a surname alone never matches. Notes in brackets after a title, such as "(photocopies)", are left out of the search. Titles with no match aren't listed; that doesn't mean they are permitted.
+
+The results download as CSV (one line per match, and a summary per tab). Optionally, off by default, they are also written into the inventory sheet: a tab named "CensorSearch results" is added, or replaced on the next check, and no classroom tab is changed. That needs the teacher's account to have edit access to the inventory, and Google then asks once to let CensorSearch edit Google Sheets. If Google refuses that permission for the school's Cloud project, add the `…/auth/spreadsheets` scope under **Data Access** in the project's Google Auth Platform settings.
+
 ## Pointing it at a sheet
 
 The page reads one of three ways. All feed the same search.
@@ -96,6 +113,8 @@ You can still edit [config.js](config.js) directly on GitHub (or in a clone) and
 | [src/signin.js](src/signin.js) | Google sign-in: loads Google Identity Services only in sign-in mode and keeps the visitor's read-only token in memory. |
 | [src/engine.js](src/engine.js) | The search: one normalizer for cells and queries, alternate forms, an in-memory index and the tiered matcher. Ported from the prototype, plus the PRD's v1 rules. |
 | [src/app.js](src/app.js) | The page's behaviour: load states, search as you type, results, the Banned By filter, freshness checks. |
+| [inventory.html](inventory.html), [src/inventory-page.js](src/inventory-page.js) | The inventory check: sign-in, the inventory's tabs, progress, the report, CSV downloads and the optional results tab. |
+| [src/inventory.js](src/inventory.js), [src/inventory-worker.js](src/inventory-worker.js) | Reads a classroom tab, checks each title against the list (in Web Workers when the browser has them), and builds the report, CSV and results tab. |
 | [apps-script/](apps-script/) | The read-only fallback for sheets that can't be link-shared. |
 | [test/](test/) | `node:test` suites: engine cases for every PRD rule, the prototype's 180 queries, the sheet loader, sign-in and the Sheets API against a mocked Google, the Apps Script against a mocked Google, the settings page against a mocked GitHub. |
 
@@ -117,4 +136,4 @@ The sample list is gitignored. Put its `.xlsx` export in the repo root (or set `
 
 ## Privacy
 
-The page fetches the sheet when it opens and keeps the list only in the open tab. What you type is searched in your browser and sent nowhere: it never goes into the page address, and nothing is written to browser storage. There are no accounts of the page's own and no analytics. With sign-in, Google gives the page a token that can only read Google Sheets and runs out after about an hour; the page keeps it in the open tab, uses it only to read the list from Google, and never stores or shows it. The settings page sends the token you paste only to GitHub (api.github.com), for the save you ask for, and keeps it nowhere: the field is cleared once the save is done.
+The page fetches the sheet when it opens and keeps the list only in the open tab. What you type is searched in your browser and sent nowhere: it never goes into the page address, and nothing is written to browser storage. There are no accounts of the page's own and no analytics. With sign-in, Google gives the page a token that can only read Google Sheets and runs out after about an hour; the page keeps it in the open tab, uses it only to read the list from Google, and never stores or shows it. The inventory check reads the inventory the same way, with the same read-only sign-in, and keeps it and its results only in the open tab; only when a teacher ticks "Also write the results into the inventory sheet" does it ask Google for permission to edit sheets, and then it uses it only to write the "CensorSearch results" tab. The settings page sends the token you paste only to GitHub (api.github.com), for the save you ask for, and keeps it nowhere: the field is cleared once the save is done.

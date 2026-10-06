@@ -222,8 +222,10 @@
   const FIELDS = ['title', 'author', 'isbn', 'bannedBy', 'type', 'year', 'memo'];
   // Per field, patterns in priority order: "Title" beats "Name" wherever the columns sit.
   const HEADER_PATTERNS = {
-    title: [/^title$/, /^titles$/, /^(book|item|material) title$/, /^title of (the )?(book|item|material)$/, /^materials?$/, /^name$/],
-    author: [/^authors?$/, /^author names?$/, /^writers?$/],
+    title: [/^title$/, /^titles$/, /^(book|item|material) titles?$/, /^(book|item) names?$/, /^title of (the )?(book|item|material)$/, /^materials?$/, /^name$/],
+    // "Author/Creator", "Author or Composer": classroom inventories name the column for more than books
+    author: [/^authors?$/, /^author names?$/, /^writers?$/, /^authors? (?:and |or )?(?:creators?|composers?|illustrators?|editors?|artists?)$/,
+      /^creators?$/, /^composers?$/],
     isbn: [/^isbn/],
     bannedBy: [/^banned ?by$/, /^banned$/],
     type: [/^type$/, /^material type$/, /^format$/, /^(media|item) type$/, /^type of material$/],
@@ -747,12 +749,16 @@
     return sheetError('http', httpMessage(status, 'sheet'));
   }
 
-  async function fetchApi(fetchFn, url, token, timeoutMs) {
+  // write: { method, body } for a call that changes a sheet (the body is sent as JSON); reads leave it out.
+  async function fetchApi(fetchFn, url, token, timeoutMs, write) {
     const ctrl = typeof AbortController === 'function' ? new AbortController() : null;
     let timer = null, timedOut = false;
     if (ctrl && timeoutMs > 0) timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, timeoutMs);
     try {
-      const init = Object.assign({}, FETCH_OPTS, { headers: { Authorization: 'Bearer ' + token } }, ctrl ? { signal: ctrl.signal } : {});
+      const headers = { Authorization: 'Bearer ' + token };
+      const send = write ? { method: write.method || 'POST', body: JSON.stringify(write.body || {}) } : {};
+      if (write) headers['Content-Type'] = 'application/json';
+      const init = Object.assign({}, FETCH_OPTS, { headers }, send, ctrl ? { signal: ctrl.signal } : {});
       let res, body = null;
       try {
         res = await fetchFn(url, init);
@@ -844,5 +850,7 @@
     tableFromCsv, tablesFromScript, tableFromGrid, extractRows, parseBannedBy, fingerprint, load,
     // exposed for tests and the app
     safeHttpsUrl, colLetter, messages: MSG,
+    // for the inventory check (src/inventory-page.js), which reads other spreadsheets through the same API
+    fetchApi, a1Sheet, API_BASE, isBlank,
   };
 });
