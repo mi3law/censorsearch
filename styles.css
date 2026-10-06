@@ -651,9 +651,9 @@ summary { cursor: pointer; }
 .inv-tabs-details[open] > summary { margin-bottom: .25rem; }
 .inv-divider { flex: none; width: 1px; margin: 6px 4px; background: var(--edge); }
 /* The write-back option: its explanation shows as a tooltip above it on hover or keyboard focus. */
-.inv-write { position: relative; width: fit-content; max-width: 100%; margin: .25rem 0 .75rem; }
-.inv-write .choice { margin: 0; min-height: 36px; }
-.inv-write input { width: 18px; height: 18px; accent-color: var(--ink); }
+.inv-write { position: relative; width: fit-content; max-width: 100%; margin: 14px 0 16px; }
+.inv-write .choice { margin: 0; min-height: 32px; align-items: center; gap: 10px; }
+.inv-write input { width: 18px; height: 18px; margin: 0; accent-color: var(--ink); }
 .inv-tooltip {
   position: absolute;
   bottom: calc(100% + 6px);
