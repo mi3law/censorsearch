@@ -36,11 +36,14 @@ const syncCrypto = {
 function makeBrowser(opts = {}) {
   // ---------------------------------------------------------------------------------------------
   // Clock and timers
+  // The clock stands still except in advance(): real time spent running the page (slow on a busy CI runner) must not
+  // move timers set later past the end of an advance() and leave them unrun.
   const RealDate = Date;
+  const START = RealDate.now();
   const clock = { offset: 0 };
   class FakeDate extends RealDate {
-    constructor(...a) { if (a.length) super(...a); else super(RealDate.now() + clock.offset); }
-    static now() { return RealDate.now() + clock.offset; }
+    constructor(...a) { if (a.length) super(...a); else super(START + clock.offset); }
+    static now() { return START + clock.offset; }
   }
   const now = () => FakeDate.now();
   let tid = 1;
