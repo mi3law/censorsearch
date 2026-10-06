@@ -78,6 +78,7 @@ const RAW = [
   ['XA24', 'Frankenstein; or, The Modern Prometheus', 'Mary Shelley', '', 'UAS', 'Book', '2024-2025', ''],
   ['XA25', 'Tin Compass, The (Revised)', 'Imogen Reyes', '', 'UAS', 'Book', '2024-2025', ''],
   ['XA26', 'Glass Owl, The – A Winter Riddle', 'Tobias Wren', '', 'UAS', 'Book', '2024-2025', ''],
+  ['XA27', 'Snowman & The Little Troll Prince, The', '', '', 'Ministry', 'Book', '2010-2011', ''],
   // ---- Punctuation, spacing and characters; numbers (XN) ----
   ['XN1', 'Twenty-One Balloons, The', 'William Pène du Bois', '', 'KES', 'Book', '2011-2012', ''],
   ['XN2', '20,000 Leagues Under the Sea', 'Jules Verne', '', 'Ministry', 'Book', '2015-2016', ''],
@@ -195,6 +196,9 @@ const cases = [
   { rule: 'AWO-5', q: 'lagoon copper', expect: { match: ['XA14', 'XA15'], before: [['XA15', 'XA14']] }, note: "In order once 'of the' is skipped: XA15 first (the prototype ranks XA14 first)." },
   { rule: 'AWO-5', q: 'copper kettle lagoon', expect: { first: 'XA14', match: ['XA14', 'XA15'] } },
   { rule: 'AWO-5', q: 'lagoon copper kettle', expect: { first: 'XA15', match: ['XA14', 'XA15'] }, note: 'Both titles equal the query as word sets; the in-order phrase then puts XA15 first.' },
+  { rule: 'AWO-5', q: 'the little prince', expect: { notMain: ['XA27'], possible: ['XA27'], reasons: [{ row: 'XA27', includes: 'your words are apart in this title' }] }, note: 'Two of its four words, apart: another title, so Possible only.' },
+  { rule: 'AWO-5', q: 'little troll prince', expect: { match: ['XA27'] }, note: 'Together (and more than half the title): a Match.' },
+  { rule: 'AWO-5', q: 'snowman prince', expect: { possible: ['XA27'], notMain: ['XA27'] } },
   { rule: 'AWO-6', q: 'orwell 1984', expect: { first: 'S9', match: ['S9'], possible: ['S8'], reasons: [{ row: 'S8', includes: 'author not listed' }] } },
   { rule: 'AWO-6', q: '1984 by George Orwell', expect: { first: 'S9', match: ['S9'], possible: ['S8'] }, note: 'S8 is Possible through the missing-author rule; the prototype drops it.' },
   { rule: 'AWO-6', q: 'karr knot', expect: { match: ['S20'] } },
