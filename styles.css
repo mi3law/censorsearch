@@ -3,30 +3,30 @@
    dashed sign. The page also works with this file missing. */
 
 :root {
-  /* One look, dark: the warm palette of option C, a shade darker. */
+  /* One look: the school's blue (the globe's #233e82), white words, and the 50th-badge gold for links and focus. */
   color-scheme: dark;
-  --bg: #171310;
-  --ink: #f1eae2;
-  --muted: #b8ada1;
-  --line: #372f29;
-  --edge: #8a7e72;          /* box, button and dashed-sign outlines */
-  --surface: #221d19;
-  --strip: #2f2823;
-  --link: #8ccfd6;
-  --link-visited: #cdb0dc;
-  --focus: #8ccfd6;
+  --bg: #233e82;
+  --ink: #f4f6fb;
+  --muted: #c9d2ea;
+  --line: #3d5699;
+  --edge: #a3b0d6;          /* box, button and dashed-sign outlines */
+  --surface: #2c4a94;
+  --strip: #3a5aa6;
+  --link: #ffd98a;
+  --link-visited: #e0c4f0;
+  --focus: #ffd98a;
   --mark-bg: #6b5210;
   --mark-fg: #fff6dc;
   /* Status bands: deep, quiet colours under white words. The -hollow colours are for words and dashes on the page. */
   --band-fg: #ffffff;
   --ministry: #8f3d30;
-  --uas: #35568c;
+  --uas: #142456;
   --other: #7a5a1f;
-  --blank: #5c534a;
+  --blank: #4a5675;
   --ministry-hollow: #ffb4a6;
-  --uas-hollow: #a9cbfa;
+  --uas-hollow: #a8d4ff;
   --other-hollow: #e8c7a0;
-  --blank-hollow: #d6ccc1;
+  --blank-hollow: #d3dbef;
   --warn-bg: #3b2d12;
   --warn-fg: #ffe2a8;
   --warn-edge: #b88a35;
@@ -110,18 +110,21 @@ summary { cursor: pointer; }
 }
 
 /* ---------------------------------------------------------------------------------------------
-   Top bar: the name, and Help (closed on every load; its panel opens under the bar) */
+   Top bar: the school's globe and the name, and Help (closed on every load; its panel opens under the bar) */
 
 .top { padding-top: 8px; }
 .wordmark {
   float: left;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
   margin: 0;
-  font-size: .8125rem;
-  line-height: 44px;
+  font-size: .9375rem;
   font-weight: 700;
-  letter-spacing: .08em;
-  color: var(--muted);
+  letter-spacing: .04em;
 }
+.wordmark img { display: block; width: 36px; height: 36px; }
 .help > summary {
   display: flex;
   align-items: center;
@@ -509,6 +512,8 @@ summary { cursor: pointer; }
 .about > .foot-links { margin: -8px 0 0; }
 .maintainer-notes ul { margin: 0; padding-left: 1.2rem; }
 .maintainer-notes li + li { margin-top: 4px; }
+.school { margin: 40px 0 0; padding-top: 24px; border-top: 1px solid var(--line); }
+.school img { display: block; width: 100%; max-width: 26rem; height: auto; margin: 0 auto; }
 
 /* ---------------------------------------------------------------------------------------------
    Wider screens: the same single column with more air */
