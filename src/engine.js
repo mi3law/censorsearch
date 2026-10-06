@@ -1307,6 +1307,31 @@
   const weakAnchor = (u, doc, h) => u.kind === 'pair' || (u.kind === 'run' && +u.run.vals[0] < 100) ||
     (u.kind === 'word' && !!u.x && (smallNum(u.x) || (u.x.letters && u.w.length === 1))) || (h.f <= F_M && smallNum(doc.fw[h.f].W[h.wi]));
   const isSubseq = (a, b) => { let i = 0; for (const ch of b) if (ch === a[i]) i++; return !!a && i === a.length; };
+  // (e5f) a few words scattered through a longer title: "the little prince" is not "The Snowman & The Little Troll Prince". The
+  // required words that hit the title (not numbers, labels or author words) sit together there in any order ("451 Farenheit"), with
+  // only small, format, role and number words or labels between them ("Harry Potter Book 4: Goblet of Fire", "Dr Jekyll and Mr
+  // Hyde"), or name more than half of the title's words ("lagoon copper" is Copper Kettle Lagoon).
+  function scattered(doc, req, E, itemHit) {
+    const fd = doc.fw[F_T], sets = [], words = doc.items.filter(it => !it.pair);
+    if (words.filter(itemHit).length * 2 > words.length) return false;
+    for (const u of req) {
+      const e = E(u), s = new Set();
+      if (!e || u.kind !== 'word' || !u.x || u.x.num !== null || u.x.roman || e.hits.some(h => h.f === F_A && h.k !== K_LOOSE)) continue;
+      for (const h of e.hits) if (h.f === F_T && h.k !== K_LOOSE) { const [a, b] = hitSpan(h); for (let k = a; k <= b; k++) s.add(k); }
+      if (s.size) sets.push(s);
+    }
+    if (sets.length < 2) return false;
+    const filler = k => fd.pos[k] < 0 || FORMAT.has(fd.W[k].w) || ROLE.has(fd.W[k].w) || fd.W[k].num !== null || !!fd.W[k].pair || !!fd.W[k].run;
+    const covered = k => filler(k) || sets.some(s => s.has(k));
+    for (let i = 0; i < fd.W.length; i++) {                                                // a run of covered words that holds every word
+      if (!covered(i)) continue;
+      let j = i;
+      while (j + 1 < fd.W.length && covered(j + 1)) j++;
+      if (sets.every(s => [...s].some(k => k >= i && k <= j))) return false;
+      i = j;
+    }
+    return true;
+  }
   function judge(ix, Q, r) {
     const doc = ix.docs[r], E = u => (u.map && u.map.get(r)) || null;
     const A = doc.fw[F_A], AW = A ? A.W : [];
@@ -1399,7 +1424,8 @@
     if (isbnExact || (gate && R && allHit && allExact)) tier = 'match';                    // (e5a)
     else if (gate && R && allHit && !loose && spelled && !demoted) tier = 'close';          // (e5b)
     else if (titleInside) { tier = 'close'; why.push('the whole listed title is in your search'); }   // (e5c)
-    if (doc.series && !loose) {                                                            // (e5d) a row covering a whole series
+    if (tier && !isbnExact && !titleInside && scattered(doc, req, E, itemHit)) { tier = 'possible'; why.push('your words are apart in this title'); }
+    if (doc.series && !loose) {                                                          // (e5d) a row covering a whole series
       // pinned by its series name read as the reverse check reads a title (every word hit, one exactly; a one-word name also needs
       // an author word), or by its author's surname (exactly, through an alternate or as a prefix; not a shared given name); a
       // one-word name typed as written lifts it unpinned ("goosebumps say cheese and die"; not "the lovely bones" for "Bone series",
