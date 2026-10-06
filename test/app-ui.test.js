@@ -214,6 +214,10 @@ function makePage(opts = {}) {
     text: id => byId[id].textContent,
     cards: () => byId.results.querySelectorAll('.card'),
     codeInput(code) { return byId['filter-codes'].querySelectorAll('input').find(i => i.parentNode.textContent.trim().startsWith(code + ' (')); },
+    tab: key => byId.results.querySelector('#tab-' + key),
+    async lineTab(key) { page.click(page.tab(key)); await flush(); },
+    async key(el, key) { el.dispatchEvent({ type: 'keydown', key, bubbles: true, preventDefault() { this.defaultPrevented = true; } }); await flush(); },
+    lines: () => byId.results.querySelectorAll('section.line').map(s => s.querySelector('h2').textContent),
     focused: () => doc.activeElement,
   };
   return page;
@@ -315,6 +319,7 @@ test('multi-line: a line whose matches are all hidden by the filter is not count
   assert.doesNotMatch(summary, /1 without/, summary);
   assert.match(summary, /2 lines: 1 with matches, 1 with matches hidden by the Banned By filter, 0 without/);
   assert.doesNotMatch(p.text('results'), /line has no listing|lines have no listing/);
+  await p.lineTab('none');
   assert.match(p.text('results'), /1 listing hidden by the Banned By filter/);
 
   p.click(p.$('filter-none'));
@@ -358,6 +363,7 @@ test('"listed as" appears only when the title differs beyond whitespace (BROWSER
 test('multi-line: a line without a listing says so on its own row, with no shared block (BROWSER-7)', async () => {
   const p = await loaded();
   await p.type('zebra tales\nxyzzy plugh');
+  await p.lineTab('all');
   assert.match(p.text('results'), /Line 2: “xyzzy plugh”No listing found/);
   assert.equal(p.$('results').querySelectorAll('.no-results').length, 0, 'no shared block');
   assert.equal(p.text('summary'), '2 lines: 1 with matches, 1 without');
@@ -368,6 +374,7 @@ test('multi-line: an error line is not counted as "no listing" (APPSHEET-12)', a
   const real = p.win.CensorEngine.search;
   p.win.CensorEngine.search = (q, ix, o) => { if (q === 'orchard') throw new Error('boom'); return real(q, ix, o); };
   await p.type('orchard\nzebra tales');
+  await p.lineTab('all');
   const s = p.text('summary');
   assert.match(s, /2 lines: 1 with matches, 1 couldn't be searched, 0 without/, s);
   const line1 = p.$('results').querySelectorAll('section.line')[0].textContent;
@@ -379,12 +386,73 @@ test('multi-line: an error line is not counted as "no listing" (APPSHEET-12)', a
 test('multi-line: a line of only common words says it was not searched (COV-15)', async () => {
   const p = await loaded();
   await p.type('the\nzebra tales');
+  await p.lineTab('all');
   const s = p.text('summary');
   assert.match(s, /2 lines: 1 with matches, 1 not searched \(only common words\), 0 without/, s);
   const line1 = p.$('results').querySelectorAll('section.line')[0].textContent;
   assert.match(line1, /Not searched: this line has only common words such as “the”\./);
   assert.doesNotMatch(line1, /No listing found/);
   assert.doesNotMatch(p.text('results'), /line has no listing/);
+});
+
+test('multi-line: tabs sort the lines, banned first and chosen by default; "All lines" keeps the pasted order', async () => {
+  const p = await loaded();
+  await p.type('xyzzy plugh\nmoon garden\nzebra tales\nharbor lights');
+  const bar = p.$('results').querySelector('.line-tabs');
+  assert.equal(bar.getAttribute('role'), 'tablist');
+  const tabs = bar.querySelectorAll('button');
+  assert.deepEqual(tabs.map(t => t.textContent), ['Banned (2)', 'Possible matches (1)', 'No listing (1)', 'All lines (4)']);
+  assert.deepEqual(tabs.map(t => t.getAttribute('aria-selected')), ['true', 'false', 'false', 'false']);
+  assert.deepEqual(tabs.map(t => t.getAttribute('tabindex')), ['0', '-1', '-1', '-1']);
+  const panel = p.$('results').querySelector('.line-panel');
+  assert.equal(panel.getAttribute('aria-labelledby'), p.tab('listed').id);
+  assert.deepEqual(p.lines(), ['Line 3: “zebra tales”', 'Line 4: “harbor lights”']);
+  assert.match(p.text('summary'), /^4 lines: 2 with matches, 1 with possible matches only, 1 without$/, 'the summary still counts every line');
+
+  await p.lineTab('none');
+  assert.deepEqual(p.lines(), ['Line 1: “xyzzy plugh”']);
+  assert.equal(p.focused(), p.tab('none'), 'focus stays on the chosen tab');
+  assert.equal(p.tab('none').getAttribute('aria-selected'), 'true');
+  await p.lineTab('all');
+  assert.deepEqual(p.lines().map(t => t.split(':')[0]), ['Line 1', 'Line 2', 'Line 3', 'Line 4']);
+
+  // Arrow keys move between tabs (wrapping) and show the tab they land on.
+  await p.key(p.tab('all'), 'ArrowRight');
+  assert.equal(p.focused(), p.tab('listed'));
+  assert.equal(p.lines().length, 2);
+  await p.key(p.tab('listed'), 'End');
+  assert.equal(p.focused(), p.tab('all'));
+  await p.key(p.tab('all'), 'ArrowLeft');
+  assert.equal(p.focused(), p.tab('none'));
+});
+
+test('multi-line: no tabs when every line has the same outcome', async () => {
+  const p = await loaded();
+  await p.type('zebra tales\nharbor lights');
+  assert.equal(p.$('results').querySelector('.line-tabs'), null);
+  assert.equal(p.lines().length, 2);
+});
+
+test('multi-line: the chosen tab survives a filter change, falls back while empty, and resets for new text', async () => {
+  const p = await loaded();
+  const list = 'zebra tales\nxyzzy plugh\ncreepy\nriddles banana\nharbor lights';
+  await p.type(list);
+  await p.lineTab('possible');
+  assert.deepEqual(p.lines().map(t => t.split(':')[0]), ['Line 4']);
+  p.change(p.codeInput('RS'), false);   // "creepy" is listed under RS only: it moves to "No listing"
+  await p.flush();
+  assert.equal(p.tab('possible').getAttribute('aria-selected'), 'true', 'kept across a filter change');
+  assert.deepEqual(p.lines().map(t => t.split(':')[0]), ['Line 4']);
+  p.change(p.codeInput('Ministry'), false);   // no possible match left: the first tab shows meanwhile
+  await p.flush();
+  assert.equal(p.tab('possible'), null);
+  assert.equal(p.tab('listed').getAttribute('aria-selected'), 'true');
+  assert.deepEqual(p.lines(), ['Line 5: “harbor lights”']);
+  p.change(p.codeInput('Ministry'), true);
+  await p.flush();
+  assert.equal(p.tab('possible').getAttribute('aria-selected'), 'true', 'and comes back when it has lines again');
+  await p.type(list + '\norchard');
+  assert.equal(p.tab('listed').getAttribute('aria-selected'), 'true', 'new text starts on the first tab');
 });
 
 test('a 1–2 letter unfinished query with no hit shows "Keep typing…", not the no-results box (COV-14)', async () => {
@@ -883,6 +951,7 @@ test('multi-line summary counts a full match hidden by the filter, and totals th
   await p.type('creepy riddles\nxyzzy plugh\nriddles');
   assert.equal(p.text('summary'),
     '3 lines: 1 with matches, 1 with matches hidden by the Banned By filter, 1 without · 2 listings hidden by the Banned By filter');
+  await p.lineTab('all');
   const line1 = p.$('results').querySelectorAll('section.line')[0].textContent;
   assert.match(line1, /1 possible match/);
   assert.match(line1, /1 more listing hidden by the Banned By filter/);

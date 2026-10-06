@@ -71,6 +71,7 @@
     enter: false,
     debounce: 0,
     expanded: new Set(), expandedFor: null,
+    lineTab: null,         // the reading-list tab chosen for this text (see LINE_TABS)
     sectionEls: new Map(), // expansion key -> section element (for focus after "Show all")
     moves: new Map(),      // new row -> { from, to } for rows on screen when the data changed
     rowPairs: null,        // old row -> the same row in the data loaded after it (see pairRows)
@@ -792,7 +793,7 @@
     state.enter = !!enter;
     clearNotice();
     const value = ui.box.value;
-    if (value !== state.expandedFor) { state.expanded.clear(); state.expandedFor = value; }
+    if (value !== state.expandedFor) { state.expanded.clear(); state.expandedFor = value; state.lineTab = null; }
     if (!state.index) { state.run = null; renderResults(); return; }   // never search an empty dataset
     const lines = arr(Engine.splitLines(value));
     if (lines.length >= 2) {
@@ -989,56 +990,42 @@
     }
   }
 
+  // Reading-list tabs, banned lines first. A tab shows only when it has lines; "All lines" keeps the pasted order.
+  // A line whose matches are all hidden by the filter goes under "No listing", as its row says "No listing shown".
+  const LINE_TABS = [
+    { key: 'listed', label: 'Banned', outcomes: ['listed'] },
+    { key: 'possible', label: 'Possible matches', outcomes: ['possible'] },
+    { key: 'none', label: 'No listing', outcomes: ['hidden', 'error', 'skipped', 'none'] },
+    { key: 'all', label: 'All lines', outcomes: null },
+  ];
+
+  function pickLineTab(key) {
+    state.lineTab = key;
+    renderResults();
+    const b = ui.results.querySelector('#tab-' + key);
+    if (b) b.focus();
+  }
+
   // Each line is counted once: with matches, matches all hidden by the filter (even beside visible possible matches),
   // possible matches only, couldn't be searched (an error), not searched (only common words), or without a listing.
   // Only the last is "no listing". The summary also totals the listings the filter hides on every line.
   function renderMulti(run, out) {
     let withMatches = 0, possibleOnly = 0, hiddenOnly = 0, failed = 0, notSearched = 0, without = 0, hiddenTotal = 0;
-    const blocks = run.lines.map((ln, i) => {
+    const lines = run.lines.map((ln, i) => {
       const res = ln.result;
       const main = splitHidden(res.main), possible = splitHidden(res.possible), prefix = splitHidden(res.isbnPrefix);
       const shown = main.shown.length + possible.shown.length + prefix.shown.length;
       const hidden = main.hidden + possible.hidden + prefix.hidden;
       const commonOnly = res.state === 'stopwordsOnly' && !shown && !hidden;
       hiddenTotal += hidden;
-      let outcome = 'none';   // for the row's marker
+      let outcome = 'none';   // for the row's marker and its tab
       if (main.shown.length) { withMatches++; outcome = 'listed'; }
       else if (main.hidden || (hidden && !shown)) { hiddenOnly++; outcome = 'hidden'; }
       else if (shown) { possibleOnly++; outcome = 'possible'; }
       else if (res.state === 'error') { failed++; outcome = 'error'; }
       else if (commonOnly) { notSearched++; outcome = 'skipped'; }
       else without++;
-
-      const id = 'line-' + (i + 1);
-      const sec = el('section', { class: 'line', 'aria-labelledby': id, 'data-outcome': outcome });
-      sec.append(el('h2', { id }, el('span', { class: 'line-no' }, 'Line ' + (i + 1) + ': '), '“' + ln.line + '”'));
-      const counts = [];
-      if (main.shown.length) counts.push(plural(main.shown.length, 'listing found', 'listings found'));
-      if (possible.shown.length) counts.push(plural(possible.shown.length, 'possible match', 'possible matches'));
-      if (prefix.shown.length) counts.push(plural(prefix.shown.length, 'ISBN starting with these digits', 'ISBNs starting with these digits'));
-      if (hidden && !shown) counts.push('No listing shown');
-      if (counts.length) sec.append(el('p', { class: 'line-count' }, counts.join(' · ')));
-
-      if (res.state === 'error') sec.append(el('p', { class: 'warning' }, 'Something went wrong with this line (' + res.message + ').'));
-      if (res.truncated) sec.append(el('p', { class: 'note' }, TEXT.truncated));
-      if (hidden) sec.append(hiddenNote(hidden, shown, 'l' + i));
-      if (main.shown.length) appendHits(sec, 'l' + i + ':main', main.shown, LIMITS.main, 3, 'listings');
-      if (possible.shown.length) {
-        sec.append(section({ key: 'l' + i + ':possible', title: 'Possible matches', hits: possible.shown, limit: LIMITS.possible, level: 3, noun: 'possible matches' }));
-      }
-      if (prefix.shown.length) {
-        sec.append(section({ key: 'l' + i + ':isbnPrefix', title: 'ISBN starts with…', hits: prefix.shown, limit: LIMITS.isbnPrefix, level: 3, noun: 'rows' }));
-      }
-      if (commonOnly) {
-        sec.append(el('div', { class: 'line-empty' }, el('p', null, 'Not searched: this line has only common words such as “the”.')));
-      } else if (!shown && !hidden && res.state !== 'error') {
-        const box = el('div', { class: 'line-empty' }, el('p', null, el('strong', null, 'No listing found')));
-        // Only an ISBN line keeps its own hint; the row itself says "No listing found".
-        const hints = hintList(res, true);
-        if (res.isbnQuery && hints.length) box.append(hintsEl([hints.shift()]));
-        sec.append(box);
-      }
-      return sec;
+      return { ln, i, res, main, possible, prefix, shown, hidden, commonOnly, outcome };
     });
 
     const counts = [fmtInt(withMatches) + ' with matches'];
@@ -1052,7 +1039,67 @@
     // Each line without a listing says so on its own row; there is no shared box above the rows.
     const unloaded = without ? unloadedNote() : null;
     if (unloaded) out.append(unloaded);
-    out.append(...blocks);
+
+    // Tabs only when the lines differ: with one kind of outcome every tab would show the same rows.
+    const tabs = LINE_TABS.map(t => Object.assign({}, t, { lines: t.outcomes ? lines.filter(x => t.outcomes.includes(x.outcome)) : lines }))
+      .filter(t => t.lines.length);
+    if (tabs.length <= 2) { out.append(...lines.map(lineSection)); return; }
+    // The chosen tab stays chosen while it has lines (a filter change can empty it for a while).
+    const current = tabs.find(t => t.key === state.lineTab) || tabs[0];
+    const bar = el('div', { class: 'line-tabs', role: 'tablist', 'aria-label': 'Show lines' });
+    for (const t of tabs) {
+      const on = t === current;
+      const b = el('button', {
+        type: 'button', role: 'tab', id: 'tab-' + t.key, 'data-key': 'tab:' + t.key,
+        'aria-selected': on ? 'true' : 'false', 'aria-controls': 'line-panel', tabindex: on ? '0' : '-1',
+      }, t.label + ' (' + fmtInt(t.lines.length) + ')');
+      b.addEventListener('click', () => { if (!on) pickLineTab(t.key); });
+      bar.append(b);
+    }
+    // Arrow keys, Home and End move between the tabs and show the one they land on.
+    bar.addEventListener('keydown', e => {
+      const at = tabs.indexOf(current);
+      const to = { ArrowRight: at + 1, ArrowLeft: at - 1, Home: 0, End: tabs.length - 1 }[e.key];
+      if (to == null) return;
+      e.preventDefault();
+      pickLineTab(tabs[(to + tabs.length) % tabs.length].key);
+    });
+    out.append(bar, el('div', { class: 'line-panel', role: 'tabpanel', id: 'line-panel', 'aria-labelledby': 'tab-' + current.key },
+      ...current.lines.map(lineSection)));
+  }
+
+  function lineSection(x) {
+    const { ln, i, res, main, possible, prefix, shown, hidden, commonOnly, outcome } = x;
+    const id = 'line-' + (i + 1);
+    const sec = el('section', { class: 'line', 'aria-labelledby': id, 'data-outcome': outcome });
+    sec.append(el('h2', { id }, el('span', { class: 'line-no' }, 'Line ' + (i + 1) + ': '), '“' + ln.line + '”'));
+    const counts = [];
+    if (main.shown.length) counts.push(plural(main.shown.length, 'listing found', 'listings found'));
+    if (possible.shown.length) counts.push(plural(possible.shown.length, 'possible match', 'possible matches'));
+    if (prefix.shown.length) counts.push(plural(prefix.shown.length, 'ISBN starting with these digits', 'ISBNs starting with these digits'));
+    if (hidden && !shown) counts.push('No listing shown');
+    if (counts.length) sec.append(el('p', { class: 'line-count' }, counts.join(' · ')));
+
+    if (res.state === 'error') sec.append(el('p', { class: 'warning' }, 'Something went wrong with this line (' + res.message + ').'));
+    if (res.truncated) sec.append(el('p', { class: 'note' }, TEXT.truncated));
+    if (hidden) sec.append(hiddenNote(hidden, shown, 'l' + i));
+    if (main.shown.length) appendHits(sec, 'l' + i + ':main', main.shown, LIMITS.main, 3, 'listings');
+    if (possible.shown.length) {
+      sec.append(section({ key: 'l' + i + ':possible', title: 'Possible matches', hits: possible.shown, limit: LIMITS.possible, level: 3, noun: 'possible matches' }));
+    }
+    if (prefix.shown.length) {
+      sec.append(section({ key: 'l' + i + ':isbnPrefix', title: 'ISBN starts with…', hits: prefix.shown, limit: LIMITS.isbnPrefix, level: 3, noun: 'rows' }));
+    }
+    if (commonOnly) {
+      sec.append(el('div', { class: 'line-empty' }, el('p', null, 'Not searched: this line has only common words such as “the”.')));
+    } else if (!shown && !hidden && res.state !== 'error') {
+      const box = el('div', { class: 'line-empty' }, el('p', null, el('strong', null, 'No listing found')));
+      // Only an ISBN line keeps its own hint; the row itself says "No listing found".
+      const hints = hintList(res, true);
+      if (res.isbnQuery && hints.length) box.append(hintsEl([hints.shift()]));
+      sec.append(box);
+    }
+    return sec;
   }
 
   // A titled results section with its count, first `limit` hits and a "Show all N" control.
