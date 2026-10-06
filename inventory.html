@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' https://accounts.google.com/gsi/client; worker-src 'self'; style-src 'self' https://accounts.google.com/gsi/style; img-src 'self' data:; connect-src 'self' https://docs.google.com https://*.googleusercontent.com https://script.google.com https://sheets.googleapis.com https://accounts.google.com/gsi/; frame-src https://accounts.google.com/gsi/; base-uri 'none'; form-action 'none'">
+  <meta name="referrer" content="strict-origin">
+  <meta name="color-scheme" content="dark">
+  <title>CensorSearch inventory check</title>
+  <meta name="description" content="Check every tab of a classroom inventory Google Sheet against the banned list at once, with a summary per classroom.">
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="styles.css">
+  <script defer src="config.js"></script>
+  <script defer src="src/sheet.js"></script>
+  <script defer src="src/signin.js"></script>
+  <script defer src="src/engine.js"></script>
+  <script defer src="src/inventory.js"></script>
+  <script defer src="src/inventory-page.js"></script>
+</head>
+<body class="wide">
+  <header class="site-header">
+    <p class="back-link"><a href="./">Back to the search page</a></p>
+    <h1>Check a classroom inventory</h1>
+    <p class="lede">Paste the link to an inventory sheet with one tab per classroom. Every title in the tabs you choose is checked against the banned list, and you get a summary per classroom.</p>
+  </header>
+
+  <main id="main" class="page settings inventory">
+    <noscript>
+      <p class="noscript">The inventory check needs JavaScript. Turn JavaScript on for this page.</p>
+    </noscript>
+
+    <p id="inv-status" class="status-line" role="status" aria-live="polite" tabindex="-1">Loading…</p>
+    <p id="inv-list" class="check-source" hidden></p>
+    <p id="inv-signin" class="status-actions" hidden></p>
+
+    <form id="inv-form" class="settings-section" novalidate hidden>
+      <div class="field">
+        <label for="inv-url">Inventory sheet link</label>
+        <p id="inv-url-help" class="help">Copy the address from the browser's address bar while the inventory sheet is open. A link to one tab works too.</p>
+        <p class="inline-input">
+          <input id="inv-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" aria-describedby="inv-url-help">
+          <button type="submit" id="inv-find">Find tabs</button>
+        </p>
+        <p id="inv-url-error" class="field-error" hidden></p>
+      </div>
+    </form>
+
+    <section id="inv-tabs-box" class="settings-section" aria-labelledby="inv-tabs-h" hidden>
+      <h2 id="inv-tabs-h">Tabs to check</h2>
+      <p id="inv-sheet-name" class="check-source"></p>
+      <p class="filter-actions">
+        <button type="button" id="inv-all">Select all</button>
+        <button type="button" id="inv-none">Clear all</button>
+        <button type="button" id="inv-only" hidden></button>
+      </p>
+      <fieldset class="group-box">
+        <legend id="inv-count">Tabs</legend>
+        <ul id="inv-tab-list" class="inv-tab-list"></ul>
+      </fieldset>
+      <div class="group-box">
+        <p class="choice"><input type="checkbox" id="inv-write"> <label for="inv-write">Also write the results into the inventory sheet</label></p>
+        <p class="help">Adds a tab named “CensorSearch results” to the inventory sheet, or replaces it if it is there, listing every title that matched. The classroom tabs are not changed. Google will ask you to let CensorSearch edit your Google Sheets, and your account needs edit access to the inventory.</p>
+      </div>
+      <p><button type="button" id="inv-check">Check the selected tabs</button></p>
+    </section>
+
+    <p id="inv-progress-text" class="status-line" aria-live="polite" hidden></p>
+    <progress id="inv-progress" class="inv-progress" max="1" value="0" hidden></progress>
+
+    <section id="inv-report" class="inv-report" aria-labelledby="inv-report-h" tabindex="-1" hidden>
+      <h2 id="inv-report-h">Results</h2>
+      <p id="inv-summary" class="summary"></p>
+      <p id="inv-write-status" class="status-line" aria-live="polite" hidden></p>
+      <p class="filter-actions">
+        <button type="button" id="inv-download">Download results (CSV)</button>
+        <button type="button" id="inv-download-summary">Download summary (CSV)</button>
+      </p>
+      <details class="howto">
+        <summary>What the results mean</summary>
+        <ul>
+          <li><strong>Likely banned</strong> (a filled sign): the title and author match a listing, or the title matches one that gives no author, or the listing covers the whole series, or the ISBN matches.</li>
+          <li><strong>Worth a look</strong> (a dashed sign): a similar title, or the same title by another author. Check it is the same item before you act.</li>
+          <li>Titles with no match aren't shown. That does not mean they are permitted: the banned list is the list that counts.</li>
+        </ul>
+      </details>
+      <div class="inv-table-wrap">
+        <table id="inv-table" class="inv-table">
+          <caption class="visually-hidden">Results per classroom tab</caption>
+          <thead>
+            <tr><th scope="col">Classroom</th><th scope="col">Titles</th><th scope="col">Likely banned</th><th scope="col">Worth a look</th><th scope="col">Checked and updated by</th></tr>
+          </thead>
+          <tbody id="inv-table-body"></tbody>
+        </table>
+      </div>
+      <div id="inv-problems" class="check-problems" hidden></div>
+      <div id="inv-tabs-results"></div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <p class="privacy">The inventory and its results stay in this tab; nothing is saved unless you download it or choose to write it into the sheet.</p>
+  </footer>
+</body>
+</html>
